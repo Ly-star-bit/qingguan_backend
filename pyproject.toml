@@ -1,0 +1,32 @@
+[project]
+name = "web-vba"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "apscheduler>=3.11.0",
+    "aspose-cells==24.7",
+    "bcrypt>=4.2.1",
+    "casbin-sqlalchemy-adapter>=1.4.0",
+    "fastapi>=0.115.6",
+    "feapder>=1.9.1",
+    "httpx>=0.28.1",
+    "jpype1>=1.5.1",
+    "loguru>=0.7.3",
+    "mysql-connector-python>=9.1.0",
+    "openpyxl>=3.1.5",
+    "pandas>=2.2.3",
+    "pathlib>=1.0.1",
+    "playwright>=1.49.1",
+    "pycasbin>=1.36.3",
+    "pyexecjs>=1.5.1",
+    "pyjwt>=2.10.1",
+    "pymysql>=1.1.1",
+    "python-dotenv>=1.0.1",
+    "pywin32>=308",
+    "requests>=2.32.3",
+    "sqlmodel>=0.0.22",
+    "tenacity>=9.0.0",
+    "uvicorn>=0.34.0",
+]

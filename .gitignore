@@ -1,0 +1,112 @@
+# Python 相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虚拟环境
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# 日志文件
+*.log
+logs/
+log/
+
+# 临时文件和目录
+temp/
+tmp/
+*.tmp
+*.temp
+
+# 输出文件
+output/
+uploads/
+session/
+
+# Excel 临时文件
+~$*.xls*
+~$*.ppt*
+~$*.doc*
+.~lock.*
+
+*.xlsx
+*.xls
+*.pptx
+*.ppt
+*.docx
+*.doc
+*.pdf
+*.zip
+# 缓存目录
+tile_cache/
+.cache/
+*.cache
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 配置文件（可选，根据需要调整）
+# *.conf
+# *.config
+
+# 压缩文件（根据需要调整）
+*.zip
+*.rar
+*.7z
+
+# 图片文件（如果是生成的临时图片）
+*.png
+*.jpg
+*.jpeg
+*.gif
+static/
+# Java 错误日志
+hs_err_pid*.log
+
+# 其他临时文件
+*.bak
+*.backup
+*.orig

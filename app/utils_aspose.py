@@ -178,6 +178,7 @@ class AsposeCellsNETHandler:
             wb = Workbook(template_path)
             civ_sheet = wb.Worksheets["CIV"]
             pl_sheet = wb.Worksheets["PL"]
+            huomian_explaination_sheet = wb.Worksheets["豁免说明"] 
             
             # 填充CIV工作表内容
             if data and len(data) > 0:
@@ -211,7 +212,7 @@ class AsposeCellsNETHandler:
                 for index, item in enumerate(data):
                     civ_row = start_row + index
                     pl_row = start_row - 1 + index  # PL表从13行开始
-                    
+                    huomian_row = 5 + index
                     # CIV表数据
                     self.set_cell_value(civ_sheet, civ_row, 1, index + 1)
                     self.set_cell_value(civ_sheet, civ_row, 2, item.get("HS_CODE", ""))
@@ -227,6 +228,8 @@ class AsposeCellsNETHandler:
                     
                     # 自动调整行高
                     civ_sheet.AutoFitRow(civ_row - 1)
+                    if index < len(data) - 1:
+                        civ_sheet.Cells.InsertRow(civ_row)
                     
                     # PL表数据
                     self.set_cell_value(pl_sheet, pl_row, 1, index + 1)
@@ -241,6 +244,22 @@ class AsposeCellsNETHandler:
                     
                     # 自动调整行高
                     pl_sheet.AutoFitRow(pl_row - 1)
+                    if index < len(data) - 1:
+                        pl_sheet.Cells.InsertRow(pl_row)
+
+
+                    # Fill 豁免说明
+                    self.set_cell_value(huomian_explaination_sheet, huomian_row, 1, item["HS_CODE"])
+                    self.set_cell_value(huomian_explaination_sheet, huomian_row, 2, item["DESCRIPTION"])
+                    self.set_cell_value(huomian_explaination_sheet, huomian_row, 3, item["usage"])
+                    self.set_cell_value(huomian_explaination_sheet, huomian_row, 4, item["note"])
+                    self.set_cell_value(huomian_explaination_sheet, huomian_row, 5, item["note_explaination"])
+                    # if item["huomian_file_name"]:
+                    #     pic_path = os.path.join("./file/huomian_file/",item["huomian_file_name"])
+
+                        # all_pic_path.append({"pic_path":pic_path,"new_name":item['DESCRIPTION']})
+                    huomian_explaination_sheet.AutoFitRow(huomian_row - 1)
+                    huomian_explaination_sheet.Cells.InsertRows(huomian_row)
             
             # 创建输出目录
             Path(output_dir).mkdir(parents=True, exist_ok=True)

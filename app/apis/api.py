@@ -13,7 +13,7 @@ class ApiEndpoint(BaseModel):
     ApiGroup: str
     Method: str  
     Path: str
-    Type: str
+    Type: Optional[str] = None
     Description: str
 
 api_router = APIRouter(tags=["api_endpoints"])
@@ -30,7 +30,7 @@ async def create_api_endpoint(endpoint: ApiEndpoint, session = Depends(get_sessi
     existing = db.api_endpoints.find_one({
         "ApiGroup": endpoint_dict["ApiGroup"],
         "Method": endpoint_dict["Method"],
-        "Type": endpoint_dict["Type"],
+        "Type": endpoint_dict.get("Type", "ACL"),  # 默认为ACL类型
         "Path": endpoint_dict["Path"]
     })
     if existing:
@@ -87,7 +87,7 @@ async def update_api_endpoint(endpoint_id: str, endpoint: ApiEndpoint, session =
         "_id": {"$ne": ObjectId(endpoint_id)},
         "ApiGroup": endpoint_dict["ApiGroup"],
         "Method": endpoint_dict["Method"],
-        "Type": endpoint_dict["Type"],
+        "Type": endpoint_dict.get("Type", "ACL"),  # 默认为ACL类型
         "Path": endpoint_dict["Path"]
     })
     if existing:

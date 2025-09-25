@@ -156,10 +156,10 @@ def optimize_packing_selection(
         "total_weight", range(n), lowBound=0, cat="Continuous"
     )
 
-    # --- 目标函数：最小化总货值（USD） ---
+    # --- 目标函数：最小化总税金（CNY） ---
     model += (
-        lp.lpSum([value_per_box_usd[i] * b[i] for i in range(n)]),
-        "Total_Value_USD",
+        lp.lpSum([tax_per_box_cny[i] * b[i] for i in range(n)]),
+        "Total_Tax_CNY",
     )
 
     # --- 约束条件 ---
@@ -218,10 +218,8 @@ def optimize_packing_selection(
 
     print(f"状态: {lp.LpStatus[model.status]}")
     if lp.LpStatus[model.status] == lp.LpStatus[1]:  # Optimal
-        print(f"\n✅ 优化成功！总箱数={B_target}, 总重量={W_target}kg")
-        print(
-            f"要求：货值/重量 ≥ {alpha:.2f} USD/kg, 税金/重量 ≤ {beta_cny:.2f} CNY/kg"
-        )
+        print(f"\n✅ 优化成功！总箱数={B_target}, 总重量={W_target}kg\n")
+        print(f"要求：货值/重量 ≥ {alpha:.2f} USD/kg, 税金/重量 ≤ {beta_cny:.2f} CNY/kg")
         print(f"汇率: 1 USD = {exchange_rate} CNY，最多选 {k} 个品类")
         print("-" * 105)
 

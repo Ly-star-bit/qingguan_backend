@@ -14,7 +14,7 @@ class MenuItem(BaseModel):
     parent_id: Optional[str] = None
     children: Optional[List['MenuItem']] = None
     path: Optional[str] = None
-    
+    api_endpoint_ids: Optional[List[str]] = None
 menu_router = APIRouter(tags=["menu"])
 
 @menu_router.get("/menu", response_model=List[MenuItem], summary="获取菜单树")
@@ -33,6 +33,7 @@ async def get_menu_tree(session = Depends(get_session)):
                 "name": child["name"], 
                 "parent_id": child["parent_id"],
                 "path": child.get("path",""),
+                "api_endpoint_ids": child.get("api_endpoint_ids", []),
                 "children": get_children(child_id)
             }
             children_items.append(MenuItem(**child_dict))
@@ -49,6 +50,7 @@ async def get_menu_tree(session = Depends(get_session)):
             name=root["name"],
             parent_id=root.get("parent_id"),
             path=root.get("path",""),
+            api_endpoint_ids=root.get("api_endpoint_ids", []),
             children=get_children(root_id)
         )
         menu_tree.append(menu_item)
@@ -73,6 +75,7 @@ async def update_menu_item(menu_id: str, menu_item: MenuItem, session = Depends(
     """更新菜单项"""
     db = session
     menu_dict = menu_item.dict(exclude_unset=True)
+    print(menu_dict)
     if "id" in menu_dict:
         del menu_dict["id"]
     if "children" in menu_dict:

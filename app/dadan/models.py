@@ -94,6 +94,7 @@ class ConsigneeData(SQLModel, table=True):
     发货人: str = Field(max_length=255, nullable=False)
     发货人详细地址: str = Field(nullable=False)
     类型: str  = Field(nullable=False)
+    关税类型: str = Field(nullable=False)
     备注: str = Field(nullable=False)
     hide: str = Field(nullable=False)
 
@@ -131,7 +132,7 @@ class User(SQLModel, table=True):
 
 class IpWhiteList(SQLModel, table=True):
     __tablename__ = "ip_white_list"
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: Optional[str] = Field(default=None, primary_key=True)
     ip: str = Field(max_length=255, nullable=False)
     remarks: str = Field(max_length=255, nullable=False)
 

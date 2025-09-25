@@ -1,4 +1,3 @@
-import hashlib
 from io import BytesIO
 import io
 import json
@@ -11,19 +10,14 @@ import traceback
 from datetime import datetime, timedelta
 from typing import List, Optional
 from urllib.parse import quote
-from uuid import UUID
 import uuid
 import PyPDF2
 import numpy as np
 import pandas as pd
-import bcrypt
 from bson import ObjectId
-import casbin
 import httpx
 from pymongo import MongoClient
-import requests
-from casbin_sqlalchemy_adapter import Adapter
-from dotenv import load_dotenv
+from morelink_api import MoreLinkClient
 
 from fastapi import (
     APIRouter,
@@ -32,73 +26,58 @@ from fastapi import (
     File,
     Form,
     HTTPException,
-    Header,
     Query,
     Request,
     Response,
-    UploadFile,
-    status
+    UploadFile
 )
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from loguru import logger
-from sqlalchemy import QueuePool, func
-from sqlalchemy.exc import InvalidRequestError
-from sqlmodel import Session, create_engine, or_, select
 from starlette.middleware.base import BaseHTTPMiddleware
-from tenacity import retry, stop_after_attempt, wait_fixed
-from openpyxl import Workbook as Openpyxl_Workbook
 
 from app.dadan.models import (
     ConsigneeData,
-    CustomClearHistoryDetailLog,
-    CustomClearHistorySummaryLog,
     Dalei,
     FactoryData,
     HaiYunZiShui,
     IpWhiteList,
-    Product3,
     ShipmentLog,
     ShippersAndReceivers,
-    User,
 )
 from app.schemas import (
-    DaleiCreate,
+    FenDanUploadData,
     FileInfo,
-    Group,
     OutputSelectedLogRequest,
     PackingType,
-    Policy,
     ProductData,
     ShippingRequest,
-    ShuidanFileUpload,
-    SummaryResponse,
-    UpdatePolicy,
-    UserCreate,
-    UserLogin,
-    UserUpdate,
-    update_cumstom_clear_history_summary_remarks,
 )
 from app.utils import (
     MinioClient,
-    create_access_token,
-    create_email_handler,
-    create_refresh_token,
-    extract_zip_codes_from_pdf,
+    extract_zip_codes_from_excel,
     generate_admin_shenhe_canada_template,
-    generate_admin_shenhe_template,
-    generate_excel_from_template_canada,
-    generate_excel_from_template_test,
+    # generate_admin_shenhe_template,
+    # generate_excel_from_template_canada,
+    # generate_excel_from_template_test,
+    # generate_fencangdan_file,
     get_ups_zip_data,
     output_custom_clear_history_log,
     fedex_process_excel_with_zip_codes,
     query_usps_zip,
-    shenzhen_customes_pdf_gennerate,
+    # shenzhen_customes_pdf_gennerate,
     ups_process_excel_with_zip_codes,
 )
-from morelink_api import MoreLinkClient
+
+from app.utils_aspose import (
+    shenzhen_customes_pdf_gennerate,
+    generate_excel_from_template_canada,
+    generate_excel_from_template_test,
+    generate_fencangdan_file,
+    generate_admin_shenhe_template
+)
 from rpa_tools import find_playwright_node_path
 from rpa_tools.email_tools import send_email
-from app.db_mongo import get_session, enforcer
+from app.db_mongo import get_session
 
 # logger.level("ALERT", no=35, color="<red>")
 
@@ -284,9 +263,9 @@ def process_shipping_data(
         )
 
         if not address_name_list:
-            logger.warning(f"{product_type}工厂地址数据库中没有对应的属性")
+            logger.warning(f"{product_record.get('中文品名')}-{product_type}-工厂地址数据库中没有对应的属性")
             return {
-                "product_attribute": f"{product_type}工厂在地址数据库中不存在"
+                "product_attribute": f"{product_record.get('中文品名')}-{product_type}-工厂地址数据库中没有对应的属性"
             }, None
 
         random_address_name = random.choice(address_name_list)
@@ -644,9 +623,10 @@ def process_shipping_data_canada(
     return results, summary_log_data
 
 
-web_vba_router = APIRouter(tags=["清关"])
+web_vba_router = APIRouter(tags=["清关"],prefix='/qingguan')
 
 
+dalei_router = APIRouter(tags=["大类"],prefix='/dalei')
 @web_vba_router.post("/dalei/", response_model=Dalei, summary="创建大类")
 def create_dalei(dalei: Dalei, session: MongoClient = Depends(get_session)):
     db = session
@@ -732,10 +712,19 @@ def read_products(
     get_all: bool = False,
     country: str = "China",
     zishui: bool = None,
+    is_hidden:bool=None,
     session: MongoClient = Depends(get_session),
 ):
     db = session
     query = {"country": country}
+    if is_hidden is not None:
+        if is_hidden:
+            query["is_hidden"] = True
+        else:
+            query["$or"] = [
+                {"is_hidden": False},
+                {"is_hidden": {"$exists": False}}
+            ]
     if zishui is not None:
         if zishui:
             query["自税"] = {"$in": [1, True]}
@@ -814,7 +803,7 @@ def update_product(
     db = session
     try:
         product_data = json.loads(product)
-    except ValueError as e:
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid JSON format")
 
     existing_product = db.products.find_one({"_id": ObjectId(product_id)})
@@ -898,7 +887,7 @@ def update_batch(
             if result.modified_count:
                 updated_count += 1
                 
-        except Exception as e:
+        except Exception:
             logger.error(f"更新ID {row['id']} 失败: {traceback.format_exc()}")
             continue
             
@@ -1076,7 +1065,7 @@ async def process_shipping_data_endpoint(
 
         if isinstance(results, dict) and results.get("product_attribute"):
             return JSONResponse(
-                {"status": "False", "content": "产品属性在地址数据库中不存在"}
+                {"status": "False", "content": results.get("product_attribute")}
             )
         if (
             isinstance(results, dict)
@@ -1255,7 +1244,7 @@ def update_product_sea(
     db = session
     try:
         product_data = json.loads(product)
-    except ValueError as e:
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid JSON format")
 
     existing_product = db.products_sea.find_one({"_id": ObjectId(product_id)})
@@ -1477,6 +1466,8 @@ def delete_packing_type(packing_type_id: str, session: MongoClient = Depends(get
     packing_type["id"] = str(packing_type["_id"])
     packing_type.pop("_id", None)
     return packing_type
+
+
 @web_vba_router.post("/ports/", summary="创建港口")
 def create_port(port: dict, session: MongoClient = Depends(get_session)):
     db = session
@@ -1715,90 +1706,6 @@ def get_exchange_rate(rate_type: str="USDCNY",session: MongoClient = Depends(get
     return {"USDCNY": rate}
 
 
-@web_vba_router.post("/add_policy/", summary="添加权限策略")
-def add_policy(policy: Policy):
-    if enforcer.add_policy(policy.sub, policy.obj, policy.act, policy.eft):
-        enforcer.load_policy()
-        return {"message": "策略添加成功"}
-    else:
-        raise HTTPException(status_code=400, detail="策略已存在或无法添加")
-
-
-@web_vba_router.delete("/remove_policy/", summary="删除权限策略")
-async def remove_policy(policy: Policy):
-    if enforcer.remove_policy(policy.sub, policy.obj, policy.act, policy.eft, "", ""):
-        enforcer.load_policy()
-        return {"message": "策略删除成功"}
-    else:
-        raise HTTPException(status_code=400, detail="策略不存在或无法删除")
-
-
-@web_vba_router.put("/update_policy/", summary="更新权限策略")
-async def update_policy(update_policy: UpdatePolicy):
-    old_policy = [
-        update_policy.old_sub,
-        update_policy.old_obj,
-        update_policy.old_act,
-        update_policy.old_eft,
-        "",
-        "",
-    ]
-    new_policy = [
-        update_policy.new_sub,
-        update_policy.new_obj,
-        update_policy.new_act,
-        update_policy.new_eft,
-        "",
-        "",
-    ]
-
-    if not enforcer.has_policy(*old_policy):
-        raise HTTPException(status_code=404, detail="旧策略不存在")
-
-    result = enforcer.update_policy(old_policy, new_policy)
-
-    if result:
-        enforcer.load_policy()
-        return {"message": "策略更新成功"}
-    else:
-        raise HTTPException(status_code=400, detail="策略更新失败或未找到旧策略")
-
-
-@web_vba_router.get("/get_policies/", summary="获取所有权限策略")
-async def get_policies():
-    return enforcer.get_policy()
-
-
-@web_vba_router.get("/get_user_policies/", summary="获取用户权限策略")
-async def get_user_policies(user: str):
-    user_policies = enforcer.get_filtered_policy(0, user)
-    if not user_policies:
-        raise HTTPException(status_code=404, detail="该用户没有策略")
-    return user_policies
-
-
-@web_vba_router.post("/add_group/", summary="添加用户组")
-async def add_group(group: Group):
-    if enforcer.add_grouping_policy(group.user, group.group):
-        enforcer.load_policy()
-        return {"message": "组添加成功"}
-    else:
-        raise HTTPException(status_code=400, detail="组已存在或无法添加")
-
-
-@web_vba_router.delete("/remove_group/", summary="删除用户组")
-async def remove_group(group: Group):
-    if enforcer.remove_grouping_policy(group.user, group.group):
-        enforcer.load_policy()
-        return {"message": "组删除成功"}
-    else:
-        raise HTTPException(status_code=400, detail="组不存在或无法删除")
-
-
-@web_vba_router.get("/get_groups/", summary="获取所有用户组")
-async def get_groups():
-    return enforcer.get_grouping_policy()
-
 
 @web_vba_router.post("/ip_white_list/", response_model=IpWhiteList, summary="添加IP白名单")
 def create_ip_white_list(
@@ -1902,6 +1809,16 @@ async def download_origin_excel(file_name: str):
 
 @web_vba_router.get("/download/{file_name}", summary="下载文件（MinIO）")
 async def download_file(file_name: str):
+    local_path = f"./file/{file_name}"
+    if os.path.exists(local_path):
+        # 如果本地存在文件，则直接下载本地文件
+        encoded_filename = quote(file_name)
+        return FileResponse(
+            path=local_path,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename={encoded_filename}"}
+        )
+    
     minio_client = MinioClient(
         os.getenv("MINIO_ENDPOINT"),
         os.getenv("MINIO_ACCESS_KEY"),
@@ -1932,7 +1849,6 @@ async def download_file(file_name: str):
         media_type=media_type,
         headers={"Content-Disposition": f"attachment; filename={encoded_filename}"},
     )
-
 
 @web_vba_router.get("/user_download/{file_name}", summary="用户下载文件（带处理）")
 async def user_download_file(file_name: str):
@@ -2026,15 +1942,15 @@ async def create_summary(summary: dict, session: MongoClient = Depends(get_sessi
     port_or_packing = (
         summary_dict["port"] if summary_dict["port"] else summary_dict["packing_type"]
     )
-    if summary_dict["estimated_tax_rate_cny_per_kg"] >= 1.2 or money_per_kg < 0.46:
-        email_data = {
-            "receiver_email": "caitlin.fang@hubs-scs.com",
-            "subject": f"{summary_dict['user_id']}-{'-'.join(summary_dict['filename'].split('-')[1:-1]).replace('CI&PL','').strip()}-{round(money_per_kg,2)}-{summary_dict['estimated_tax_rate_cny_per_kg']} CNY/Kg-{port_or_packing}-税金{summary_dict['estimated_tax_amount']}-{summary_dict['gross_weight_kg']}Kg-货值{summary_dict['total_price_sum']}",
-            "body": "",
-            "status": 0,
-            "create_time": datetime.now()
-        }
-        db.email_queue.insert_one(email_data)
+    # if summary_dict["estimated_tax_rate_cny_per_kg"] >= 1.2 or money_per_kg < 0.46:
+    #     email_data = {
+    #         "receiver_email": "caitlin.fang@hubs-scs.com",
+    #         "subject": f"{summary_dict['user_id']}-{'-'.join(summary_dict['filename'].split('-')[1:-1]).replace('CI&PL','').strip()}-{round(money_per_kg,2)}-{summary_dict['estimated_tax_rate_cny_per_kg']} CNY/Kg-{port_or_packing}-税金{summary_dict['estimated_tax_amount']}-{summary_dict['gross_weight_kg']}Kg-货值{summary_dict['total_price_sum']}",
+    #         "body": "",
+    #         "status": 0,
+    #         "create_time": datetime.now()
+    #     }
+    #     db.email_queue.insert_one(email_data)
     # for detail in summary_dict['details']:
     #     detail['summary_log_id'] = summary_dict['id']
     #     detail['generation_time'] = summary_dict['generation_time']
@@ -2654,6 +2570,9 @@ async def output_selected_log(
             "Content-Disposition": "attachment; filename=custom_clear_history_log.xlsx"
         },
     )
+
+
+
 @web_vba_router.post(
     "/haiyunzishui/",
     summary="创建海运自税记录"
@@ -3154,14 +3073,21 @@ async def process_excel_usp_data(file: UploadFile = File(...)):
         if not invalid_dates.empty:
             raise ValueError("日期格式不对可能为空")
 
-        # 获取联邦快递的邮政编码
-        fedex_pdf_path = os.path.join(
+        # # 获取联邦快递的邮政编码
+        # fedex_pdf_path = os.path.join(
+        #     os.getcwd(),
+        #     "file",
+        #     "remoteaddresscheck",
+        #     "DAS_Contiguous_Extended_Remote_Alaska_Hawaii_2025.pdf",
+        # )  # 确保PDF文件名正确
+        # fedex_zip_codes_by_category = extract_zip_codes_from_pdf(fedex_pdf_path)
+        fedex_excel_path = os.path.join(
             os.getcwd(),
             "file",
             "remoteaddresscheck",
-            "DAS_Contiguous_Extended_Remote_Alaska_Hawaii_2025.pdf",
-        )  # 确保PDF文件名正确
-        fedex_zip_codes_by_category = extract_zip_codes_from_pdf(fedex_pdf_path)
+            "DAS_Contiguous_Extended_Remote_Alaska_Hawaii_20250702.xlsx",
+        )
+        fedex_zip_codes_by_category = extract_zip_codes_from_excel(fedex_excel_path)
 
         ups_zip_data = get_ups_zip_data()
         # 处理每一行数据
@@ -3347,9 +3273,14 @@ async def remoteaddresscheck(file: UploadFile = File(...)):
             raise HTTPException(
                 status_code=404, detail="未找到Delivery Area Surcharge.pdf文件"
             )
-
+        excel_path = os.path.join(
+            os.getcwd(),
+            "file",
+            "remoteaddresscheck",
+            "DAS_Contiguous_Extended_Remote_Alaska_Hawaii_20250702.xlsx",
+        )
         # 使用process_excel_with_zip_codes函数处理Excel数据
-        result_df = fedex_process_excel_with_zip_codes(excel_file, pdf_path)
+        result_df = fedex_process_excel_with_zip_codes(excel_file, pdf_path,excel_path=excel_path)
 
         # 创建输出文件
         output = io.BytesIO()
@@ -3496,19 +3427,29 @@ def get_ups_remoteaddresscheck_effective_date():
 
 @web_vba_router.post("/all_remoteaddresscheck_process", summary="批量校验Fedex/UPS偏远地址")
 async def all_remoteaddresscheck_process(zip_code_str: str = Form(...)):
-    pdf_path = os.path.join(
+    # pdf_path = os.path.join(
+    #     os.getcwd(),
+    #     "file",
+    #     "remoteaddresscheck",
+    #     "DAS_Contiguous_Extended_Remote_Alaska_Hawaii_2025.pdf",
+    # )  # 确保PDF文件名正确
+    excel_path = os.path.join(
         os.getcwd(),
         "file",
         "remoteaddresscheck",
-        "DAS_Contiguous_Extended_Remote_Alaska_Hawaii_2025.pdf",
-    )  # 确保PDF文件名正确
-
+        "DAS_Contiguous_Extended_Remote_Alaska_Hawaii_20250702.xlsx",
+    )
     # 检查PDF文件是否存在
-    if not os.path.exists(pdf_path):
+    # if not os.path.exists(pdf_path):
+    #     raise HTTPException(
+    #         status_code=404, detail="未找到Delivery Area Surcharge.pdf文件"
+    #     )  # 调用ups_process_excel_with_zip_codes函数
+    if not os.path.exists(excel_path):
         raise HTTPException(
-            status_code=404, detail="未找到Delivery Area Surcharge.pdf文件"
-        )  # 调用ups_process_excel_with_zip_codes函数
-    fedex_result = fedex_process_excel_with_zip_codes(zip_code_str, pdf_path)
+            status_code=404, detail="未找到DAS_Contiguous_Extended_Remote_Alaska_Hawaii_2025.xlsx文件"
+        )
+    fedex_result = fedex_process_excel_with_zip_codes(zip_code_str,excel_path=excel_path)
+    # fedex_result = extract_zip_codes_from_excel(zip_code_str)
     ups_result = ups_process_excel_with_zip_codes(zip_code_str)
     # 合并两个结果列表并按zip_code排序
     combined_result = sorted(fedex_result + ups_result, key=lambda x: x["zip_code"])
@@ -3518,13 +3459,21 @@ async def all_remoteaddresscheck_process(zip_code_str: str = Form(...)):
 
     # 定义 property 中文映射
     property_chinese_mapping = {
-        "FEDEX": {
-            "Contiguous U.S.": "普通偏远",
-            "Contiguous U.S.: Extended": "超偏远",
-            "Contiguous U.S.: Remote": "超级偏远",
-            "Alaska": "阿拉斯加偏远",
-            "Hawaii": "夏威夷偏远",
-            "Intra-Hawaii": "夏威夷内部偏远",
+        # "FEDEX": {
+        #     "Contiguous U.S.": "普通偏远",
+        #     "Contiguous U.S.: Extended": "超偏远",
+        #     "Contiguous U.S.: Remote": "超级偏远",
+        #     "Alaska": "阿拉斯加偏远",
+        #     "Hawaii": "夏威夷偏远",
+        #     "Intra-Hawaii": "夏威夷内部偏远",
+        # },
+         "FEDEX": {
+            "DAS_ContUS": "普通偏远",
+            "DAS_ContUSExt": "超偏远",
+            "DAS_ContUSRem": "超级偏远",
+            "DAS_Alaska": "阿拉斯加偏远",
+            "DAS_Hawaii": "夏威夷偏远",
+            "DAS_IntraHawaii": "夏威夷内部偏远",
         },
         "UPS": {
             "US 48 Zip": "普通偏远",
@@ -3766,7 +3715,86 @@ def verify_code(verification_code: str = Form(...)):
     }
 
 
+@web_vba_router.post("/get_morelink_zongdan", summary="获取morelink总单的件毛体")
+def get_morelink_zongdan(master_bill_no: str):
+    """获取件毛体数据"""
+
+    morelink_client = MoreLinkClient(node_path=find_playwright_node_path())
+    data = morelink_client.zongdan_api_httpx()
+    
+   
+    filter_data = [
+        row for row in data
+        if row.get('billno') == master_bill_no
+    ]
+    if not filter_data:
+        return {
+            "code": 400,
+            "message": "总单号不存在",
+            "data": None
+        }
+    print(filter_data)
+    result = {
+        "num":filter_data[0]['yjnum'],
+        'weight':filter_data[0]['yjweight'],
+        'volume':filter_data[0]['yjvolume'],
+        'flight_no':filter_data[0]['flightno'],
+        'shipcompany':filter_data[0]['shipcompany'],
+        "startland":filter_data[0]['startland'],
+        'destination':filter_data[0]['destination'],
+        'etd':filter_data[0]['etd']
+        
+    
+    }
+    return result
+   
+
+@web_vba_router.post("/fencangdan_file_generate", summary="生成分舱单文件")
+def generate_fencangdan_file_result(upload_data:FenDanUploadData):
+    upload_data_dict = upload_data.model_dump()
+    result_path = generate_fencangdan_file(upload_data_dict)
+    return FileResponse(
+            path=result_path,
+            filename=f"{upload_data.orderNumber}",
+        )
 
 
 
+from auto_or import get_qingguan_access_token,optimize_packing_selection,fetch_products_from_api
 
+from pydantic import BaseModel
+from typing import List, Dict, Optional
+class PackingOptimizationRequest(BaseModel):
+    products_data: List[Dict] = []
+    W_target: float = 3537
+    B_target: int = 214
+    alpha: float = 0.46
+    beta_cny: float = 1.27
+    exchange_rate: float = 7.22
+    k: int = 3
+    min_boxes_per_product: int = 20
+    expansion_factor:Optional[float] = None
+@web_vba_router.post("/packing_selection_optimize", summary="最优箱数调整")
+def packing_selection_optimize(upload_data: PackingOptimizationRequest):
+    # 如果products_data为空，则从API获取
+    if not upload_data.products_data:
+        token = get_qingguan_access_token()
+        products_data = fetch_products_from_api(api_token=token)
+    else:
+        products_data = upload_data.products_data
+    
+    # 调用优化函数，传入所有参数
+    result = optimize_packing_selection(
+        products_data=products_data,
+        W_target=upload_data.W_target,
+        B_target=upload_data.B_target,
+        alpha=upload_data.alpha,
+        beta_cny=upload_data.beta_cny,
+        exchange_rate=upload_data.exchange_rate,
+        k=upload_data.k,
+        min_boxes_per_product=upload_data.min_boxes_per_product,
+        expansion_factor=upload_data.expansion_factor
+
+    )
+    
+    return result

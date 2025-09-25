@@ -8,24 +8,46 @@ from app.dadan.models import CustomClearHistorySummaryLog
 
 
 class Policy(BaseModel):
+    ptype: str = "p"
     sub: str
     obj: str
     act: str
-    eft: str = None
+    eft: str = "allow"
+    description: str = ""
 
 class UpdatePolicy(BaseModel):
+    old_ptype: str = "p"
     old_sub: str
     old_obj: str
     old_act: str
-    old_eft: str
+    old_eft: str = "allow"
+    old_description: str = ""
+    new_ptype: str = "p"
     new_sub: str
     new_obj: str
     new_act: str
-    new_eft: str
+    new_eft: str = "allow"
+    new_description: str = ""
 
 class Group(BaseModel):
     user: str
     group: str
+    description:str
+
+class GroupUpdate(BaseModel):
+    old_user: str
+    old_group: str
+    old_description: str
+    new_user: str
+    new_group: str
+    new_description: str
+
+
+class GroupWithPolicies(BaseModel):
+    user: str
+    group: str
+    description: str
+    policies: List[Policy]
 
 
 class UserCreate(BaseModel):
@@ -113,3 +135,28 @@ class ShuidanFileUpload(BaseModel):
     id: str
     file_type: str
     file: UploadFile = File(...)
+
+
+class FenDanUploadSubOrderData(BaseModel):
+    subOrderNumber: str
+    boxCount: int
+    grossWeight: float
+    volume: float
+    sender: str
+    receiver: str
+    natureOfName:str
+    type: str
+
+class FenDanUploadData(BaseModel):
+    # country: str
+    orderNumber: str
+    # port: str
+    # rate_cn_us: str
+    # special_qingguan_tihuo: Optional[str]
+    subOrders: List[FenDanUploadSubOrderData]
+    # 新增字段
+    flight_no: Optional[str] = None
+    startland: Optional[str] = None
+    destination: Optional[str] = None
+    etd:Optional[str] = None
+    shipcompany:Optional[str] = None

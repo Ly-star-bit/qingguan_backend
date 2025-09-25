@@ -195,7 +195,7 @@ class MoreLinkClient:
 
         encoded_data = urllib.parse.urlencode(payload)
         client = self.httpx_client
-        response = client.post(url=url, data=encoded_data)
+        response = client.post(url=url, data=encoded_data,timeout=30)
 
         if response.status_code == 200:
             try:
@@ -301,7 +301,7 @@ class MoreLinkClient:
         encoded_payload = urllib.parse.urlencode(zongdan_payload)
         client = self.httpx_client
 
-        response = client.post(url=zongdan_list_url, data=encoded_payload)
+        response = client.post(url=zongdan_list_url, data=encoded_payload,timeout=30)
 
         if response.status_code == 200:
             try:

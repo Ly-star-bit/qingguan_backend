@@ -207,3 +207,51 @@ async def compare_fedex_zip_files(file1, file2):
     data2 = get_fedex_zip_data_from_file(content2)
     
     return compare_zip_data(data1, data2)
+
+def extract_zip_codes_from_excel(excel_path):
+    """
+    从Excel文件中提取邮政编码
+    
+    Args:
+        excel_path: Excel文件路径
+    
+    Returns:
+        dict: 以sheet名为键，邮政编码列表为值的字典
+    """
+    # 检查是否存在缓存文件
+    cache_file = excel_path + '.json'
+    if os.path.exists(cache_file):
+        print(f"从缓存文件加载邮政编码数据: {cache_file}")
+        with open(cache_file, 'r') as f:
+            return json.load(f)
+            
+    print(f"从Excel文件提取邮政编码数据: {excel_path}")
+    
+    # 存储结果的字典
+    zip_codes_by_sheet = {}
+    
+    # 读取Excel文件的所有sheet
+    df = pd.read_excel(excel_path, sheet_name=None)
+    
+    # 遍历每个sheet
+    for sheet_name, sheet_data in df.items():
+        zip_codes = []
+        
+        # 遍历sheet中的所有列
+        for column in sheet_data.columns:
+            # 提取该列中的所有数字
+            codes = sheet_data[column].astype(str).str.findall(r'\b\d{5}\b')
+            # 展平列表并添加到结果中
+            zip_codes.extend([code for code_list in codes if code_list for code in code_list])
+            
+        # 去重并存储
+        zip_codes_by_sheet[sheet_name] = list(set(zip_codes))
+    
+    # 将结果保存到缓存文件
+    with open(cache_file, 'w') as f:
+        json.dump(zip_codes_by_sheet, f)
+        
+    return zip_codes_by_sheet
+
+if __name__ == "__main__":
+    extract_zip_codes_from_excel(r"D:\RPAProject\web_vba\file\remoteaddresscheck\DAS_Contiguous_Extended_Remote_Alaska_Hawaii_20250702.xlsx")

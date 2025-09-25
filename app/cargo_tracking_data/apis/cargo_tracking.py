@@ -260,6 +260,7 @@ async def export_cargo_tracking(
                 
         elif customer_name == "HKLMT-香港兰玛特-SZ":
             # 处理收货时间格式
+            expanded_data = []
             for doc in data:
                 if '收货时间' in doc and doc['收货时间']:
                     try:
@@ -268,6 +269,26 @@ async def export_cargo_tracking(
                         doc['收货时间'] = date_parts
                     except:
                         pass  # 如果转换失败,保持原值
+                fba_value = doc.get('FBA号', '')
+                beihuo_value = doc.get('备货单号', '')
+                
+                # 确保FBA号和备货单号都不为None
+                if fba_value and beihuo_value and len(str(fba_value).split(',')) > 1:
+                    fbano_list = str(fba_value).split(',')
+                    # 先尝试逗号分割，如果只有一个元素，则尝试空格分割
+                    if ',' in str(beihuo_value):
+                        beihuono_list = str(beihuo_value).strip(",").strip().split(',')
+                    else:
+                        beihuono_list = str(beihuo_value).strip().split(' ')
+                    # if doc['A/S单号'] == 'A250805470':
+                    #     print(beihuono_list)
+                    for i in range(len(fbano_list)):
+                        new_doc = doc.copy()
+                        new_doc['FBA号'] = fbano_list[i].strip() if i < len(fbano_list) else ''
+                        new_doc['备货单号'] = beihuono_list[i].strip() if i < len(beihuono_list) else ''
+                        expanded_data.append(new_doc)
+                else:
+                    expanded_data.append(doc)
             
             columns = [
                 '客户名称', '月份', '收货时间', '备货单号', '起运地',
@@ -277,7 +298,7 @@ async def export_cargo_tracking(
                 '清关放行时间', '当地提取时间', '当前状态', '签收时间', '时效',
                 '是否进口查验', '异常备注', '航班号', 
             ]
-            df = pd.DataFrame(data)[columns]
+            df = pd.DataFrame(expanded_data)[columns]
             
             # 创建Excel文件
             output = BytesIO()

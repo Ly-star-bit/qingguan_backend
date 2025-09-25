@@ -90,17 +90,6 @@ def process_data(history_file, directory, output_file):
 
 
 if __name__ == '__main__':
-    # 示例用法
-    history_file = r'C:\Users\a1337\Downloads\custom_clear_history_log (5).xlsx'  # 替换为你的历史明细文件路径
-    directory = r'D:\react_python\vba_front\backend\file'  # 替换为包含Excel文件的目录路径
-    output_file = 'merged_data.xlsx'  # 替换为你想保存的文件名
-
-    # 确保目录存在
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-
-    process_data(history_file, directory, output_file)
-
-    # 打印结果或保存到文件
-    # print(result_df)
-    # result_df.to_excel('merged_data.xlsx', index=False)
+    import clr
+    print(clr.__file__)
+    print(dir(clr))

@@ -49,7 +49,7 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # 定义不需要验证的路径
         logger.info(f"request.url.path:{request.url.path}")
-        excluded_paths = ["/login", "/docs", "/openapi.json", "/redoc","/ip_white_list/","/excel-preview","/luckysheet-preview","/upload-excel-luckysheet","/process_excel_usp_data","/refresh","/17track/notify"]
+        excluded_paths = ["/login", "/docs", "/openapi.json", "/redoc","/qingguan/ip_white_list/","/excel-preview","/luckysheet-preview","/upload-excel-luckysheet","/process_excel_usp_data","/refresh","/17track/notify"]
         
         # 添加GET /menu 不需要鉴权
         if request.method == "GET" and request.url.path == "/menu":

@@ -2,6 +2,7 @@ from copy import copy
 from datetime import date, datetime, timedelta
 import io
 import os
+from pathlib import Path
 import random
 
 import textwrap
@@ -51,11 +52,11 @@ load_dotenv()
 
 # 启动 JVM 并确保 JVM 启动在导入之前
 
-if not jpype.isJVMStarted():
-        jpype.startJVM()
+# if not jpype.isJVMStarted():
+#         jpype.startJVM()
 
 # 在 JVM 启动后导入 Java 依赖的模块
-from asposecells.api import Workbook, License, PdfSaveOptions,TextAlignmentType, SaveFormat,SheetSet
+# from asposecells.api import Workbook, License, PdfSaveOptions,TextAlignmentType, SaveFormat,SheetSet
 # 密钥和算法
 ACCESS_TOKEN_SECRET_KEY = os.getenv("ACCESS_TOKEN_SECRET_KEY")
 ACCESS_TOKEN_ALGORITHM = os.getenv("ACCESS_TOKEN_ALGORITHM")
@@ -75,8 +76,71 @@ def create_refresh_token(data: dict):
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, ACCESS_TOKEN_SECRET_KEY, algorithm=ACCESS_TOKEN_ALGORITHM)
     return encoded_jwt
+# def set_cell_value(sheet, row, column, value):
+#         cell = sheet.getCells().get(row - 1, column - 1)  # Adjust for zero-based index
+        
+#         if isinstance(value, str) and value.startswith('='):
+#             # 如果 value 是一个公式
+#             cell.setFormula(value)
+#         else:
+#             # 否则，设置为普通值
+#             cell.putValue(value)
+        
+#         style = cell.getStyle()
+#         style.setTextWrapped(True)
+#         style.setHorizontalAlignment(TextAlignmentType.CENTER)
+#         style.setVerticalAlignment(TextAlignmentType.CENTER)
+#         cell.setStyle(style)
+# def generate_fencangdan_file(data):
+#     apcelllic = License()
+#     apcelllic.setLicense('JAVA-Aspose.Excel-24.7/license.xml')
+#     fendan_path = r".\file\excel_template\分单模板 - 执行.xlsx"
+#     cangdan_path = r".\file\excel_template\舱单模板 - 执行.xlsx"
 
+#     cangdan_wb = Workbook(cangdan_path)
+#     cangdan_sheet = cangdan_wb.getWorksheets().get("Sheet1")
+#     #处理舱单
+#     set_cell_value(cangdan_sheet,3,9,data['orderNumber'])
+#     set_cell_value(cangdan_sheet,5,9,data['flight_no'])
+
+#     cangdan_row = 11
+#     for suborder in data['subOrders']:
+#         set_cell_value(cangdan_sheet,cangdan_row,1,suborder['subOrderNumber'])
+#         set_cell_value(cangdan_sheet,cangdan_row,3,suborder['boxCount'])
+#         set_cell_value(cangdan_sheet,cangdan_row,4,suborder['grossWeight'])
+#         set_cell_value(cangdan_sheet,cangdan_row,5,data['startland'])
+#         set_cell_value(cangdan_sheet,cangdan_row,6,data['destination'])
+#         set_cell_value(cangdan_sheet,cangdan_row,7,suborder['sender'])
+#         set_cell_value(cangdan_sheet,cangdan_row,8,suborder['receiver'])
+
+#         cangdan_sheet.autoFitRow(cangdan_row - 1)
+#         cangdan_row += 1
+
+
+#     output_dir = Path("file/fencangdan/cangdan")
+#     output_dir.mkdir(parents=True, exist_ok=True)
+#     output_path = str(output_dir / f"{time.time()}-{data['orderNumber']} .xlsx")
+
+#     cangdan_wb.save(output_path, SaveFormat.XLSX)
+#     print(f"Excel file generated: {output_path}")
+
+#     # 生成 PDF 文件
+#     pdf_path = excel2pdf(output_path, 'pdf')
+#     return pdf_path
+#     #处理分单
+#     # fendan_wb =    openpyxl.load_workbook(fendan_path)
+#     # fendan_sheet = fendan_wb.active
+#     # for suborder in data['subOrders']:
+#     #     set_cell_value(fendan_sheet,1,1,data['orderNumber'])
+#     #     set_cell_value(fendan_sheet,1,35,suborder['subOrderNumber'])
+#     #     set_cell_value(fendan_sheet,4,1,suborder['sender'])
+#     #     set_cell_value(fendan_sheet,5,1,suborder['receiver'])
+#     #     set_cell_value(fendan_sheet,15,1,data['startland'])
+#     #     set_cell_value(fendan_sheet,18,1,data[''])
+#     #     set_cell_value(fendan_sheet,20,1,data['destination'])
+#     #     set_cell_value(fendan_sheet,20,9,data['flight_no'])
 def generate_admin_shenhe_template(data, totalyugutax):
+    start_time = time.time()
     template_path = "./file/excel_template/ADMIN-审核文件模板-0411.xlsx"
     wb = openpyxl.load_workbook(template_path)
     sheet = wb.active
@@ -198,6 +262,8 @@ def generate_admin_shenhe_template(data, totalyugutax):
     # 保存文件
     output_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}_admin_审核.xlsx"
     wb.save(output_path)
+    end_time = time.time()
+    print(f"shenzhen_customes_pdf_gennerate 审核模板 运行时间: {end_time - start_time:.2f} 秒")
     return output_path
 def generate_admin_shenhe_canada_template(data, totalyugutax):
     template_path = "./file/excel_template/加拿大_admin_审核-模板-0606.xlsx"
@@ -313,473 +379,473 @@ def generate_admin_shenhe_canada_template(data, totalyugutax):
     output_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}_admin_审核.xlsx"
     wb.save(output_path)
     return output_path 
-def generate_excel_from_template_test(data,totalyugutax,port):
-    apcelllic = License()
-    apcelllic.setLicense('JAVA-Aspose.Excel-24.7/license.xml')
-    template_path = "./file/excel_template/副本清关发票箱单模板 - 0918更新.xlsx"
-    wb = Workbook(template_path)
-    civ_sheet = wb.getWorksheets().get("CIV")
-    pl_sheet = wb.getWorksheets().get("PL")
-    huomian_explaination_sheet = wb.getWorksheets().get("豁免说明")
-    start_row = 13
+# def generate_excel_from_template_test(data,totalyugutax,port):
+#     apcelllic = License()
+#     apcelllic.setLicense('JAVA-Aspose.Excel-24.7/license.xml')
+#     template_path = "./file/excel_template/副本清关发票箱单模板 - 0918更新.xlsx"
+#     wb = Workbook(template_path)
+#     civ_sheet = wb.getWorksheets().get("CIV")
+#     pl_sheet = wb.getWorksheets().get("PL")
+#     huomian_explaination_sheet = wb.getWorksheets().get("豁免说明")
+#     start_row = 13
 
     
 
-    def set_cell_value(sheet, row, column, value):
-        cell = sheet.getCells().get(row - 1, column - 1)  # Adjust for zero-based index
+#     def set_cell_value(sheet, row, column, value):
+#         cell = sheet.getCells().get(row - 1, column - 1)  # Adjust for zero-based index
         
-        if isinstance(value, str) and value.startswith('='):
-            # 如果 value 是一个公式
-            cell.setFormula(value)
-        else:
-            # 否则，设置为普通值
-            cell.putValue(value)
+#         if isinstance(value, str) and value.startswith('='):
+#             # 如果 value 是一个公式
+#             cell.setFormula(value)
+#         else:
+#             # 否则，设置为普通值
+#             cell.putValue(value)
         
-        style = cell.getStyle()
-        style.setTextWrapped(True)
-        style.setHorizontalAlignment(TextAlignmentType.CENTER)
-        style.setVerticalAlignment(TextAlignmentType.CENTER)
-        cell.setStyle(style)
+#         style = cell.getStyle()
+#         style.setTextWrapped(True)
+#         style.setHorizontalAlignment(TextAlignmentType.CENTER)
+#         style.setVerticalAlignment(TextAlignmentType.CENTER)
+#         cell.setStyle(style)
 
 
-        # Auto-adjust row height
-        # Adjust based on value length, e.g., number of lines
-        # num_lines = value.count("\n") + 1
-        # if num_lines > 1:
-        #     sheet.getCells().setRowHeight(row - 1, num_lines * 15)
+#         # Auto-adjust row height
+#         # Adjust based on value length, e.g., number of lines
+#         # num_lines = value.count("\n") + 1
+#         # if num_lines > 1:
+#         #     sheet.getCells().setRowHeight(row - 1, num_lines * 15)
 
-    # Fill CIV content
-    set_cell_value(civ_sheet, 1, 1, data[0]["shipper_name"])
-    set_cell_value(civ_sheet, 2, 1, data[0]["shipper_address"])
-    set_cell_value(civ_sheet, 6, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
+#     # Fill CIV content
+#     set_cell_value(civ_sheet, 1, 1, data[0]["shipper_name"])
+#     set_cell_value(civ_sheet, 2, 1, data[0]["shipper_address"])
+#     set_cell_value(civ_sheet, 6, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
 
-    today_minus_5 = datetime.now() - timedelta(days=5)
-    formatted_date = today_minus_5.strftime("%Y%m%d")
-    random_number = random.randint(1000, 9999)
-    result_1 = f"{formatted_date}{random_number}"
-    set_cell_value(civ_sheet, 6, 9, result_1)
-    set_cell_value(civ_sheet, 7, 9, result_1)
-    set_cell_value(civ_sheet, 8, 9, datetime.now().strftime("%Y/%m/%d"))
-    if data[0]["export_country"] == "Vietnam":
-        set_cell_value(civ_sheet, 9, 9, "MADE IN VIETNAM")
-        set_cell_value(civ_sheet, 9, 2, "")
-        set_cell_value(pl_sheet, 8, 9, "MADE IN VIETNAM")
-        set_cell_value(pl_sheet, 8, 2, "")
-    set_cell_value(pl_sheet, 1, 1, data[0]["shipper_name"])
-    set_cell_value(pl_sheet, 2, 1, data[0]["shipper_address"])
-    set_cell_value(pl_sheet, 5, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
+#     today_minus_5 = datetime.now() - timedelta(days=5)
+#     formatted_date = today_minus_5.strftime("%Y%m%d")
+#     random_number = random.randint(1000, 9999)
+#     result_1 = f"{formatted_date}{random_number}"
+#     set_cell_value(civ_sheet, 6, 9, result_1)
+#     set_cell_value(civ_sheet, 7, 9, result_1)
+#     set_cell_value(civ_sheet, 8, 9, datetime.now().strftime("%Y/%m/%d"))
+#     if data[0]["export_country"] == "Vietnam":
+#         set_cell_value(civ_sheet, 9, 9, "MADE IN VIETNAM")
+#         set_cell_value(civ_sheet, 9, 2, "")
+#         set_cell_value(pl_sheet, 8, 9, "MADE IN VIETNAM")
+#         set_cell_value(pl_sheet, 8, 2, "")
+#     set_cell_value(pl_sheet, 1, 1, data[0]["shipper_name"])
+#     set_cell_value(pl_sheet, 2, 1, data[0]["shipper_address"])
+#     set_cell_value(pl_sheet, 5, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
 
-    set_cell_value(pl_sheet, 5, 9, result_1)
-    set_cell_value(pl_sheet, 6, 9, result_1)
-    set_cell_value(pl_sheet, 7, 9, datetime.now().strftime("%Y/%m/%d"))
+#     set_cell_value(pl_sheet, 5, 9, result_1)
+#     set_cell_value(pl_sheet, 6, 9, result_1)
+#     set_cell_value(pl_sheet, 7, 9, datetime.now().strftime("%Y/%m/%d"))
 
-    if data[0]["execute_type"] == "Sea":
-        set_cell_value(civ_sheet, 9, 2, "")
-        set_cell_value(civ_sheet, 10, 2, "US BY SEA")
-        set_cell_value(pl_sheet, 8, 2, "")
-        set_cell_value(pl_sheet, 9, 2, "US BY SEA")
-    else:
-        set_cell_value(civ_sheet, 11, 9, port)
-        set_cell_value(pl_sheet, 10, 9, port)
+#     if data[0]["execute_type"] == "Sea":
+#         set_cell_value(civ_sheet, 9, 2, "")
+#         set_cell_value(civ_sheet, 10, 2, "US BY SEA")
+#         set_cell_value(pl_sheet, 8, 2, "")
+#         set_cell_value(pl_sheet, 9, 2, "US BY SEA")
+#     else:
+#         set_cell_value(civ_sheet, 11, 9, port)
+#         set_cell_value(pl_sheet, 10, 9, port)
 
     
-    all_pic_path = []
-    for index, item in enumerate(data):
-        civ_row = 14 + index
-        huomian_row = 5 + index
-        pl_row = start_row + index
+#     all_pic_path = []
+#     for index, item in enumerate(data):
+#         civ_row = 14 + index
+#         huomian_row = 5 + index
+#         pl_row = start_row + index
 
 
-        # Fill CIV
-        set_cell_value(civ_sheet, civ_row, 1, "=ROW()-ROW($A$14)+1")
-        set_cell_value(civ_sheet, civ_row, 2, item["HS_CODE"])
-        set_cell_value(civ_sheet, civ_row, 3, item["DESCRIPTION"])
-        set_cell_value(civ_sheet, civ_row, 4, item["quanity"])
-        set_cell_value(civ_sheet, civ_row, 5, item["danwei"])
-        set_cell_value(civ_sheet, civ_row, 6, item["unit_price"])
-        set_cell_value(civ_sheet, civ_row, 7, round(item["total_price"]))
-        set_cell_value(civ_sheet, civ_row, 8, item["texture"])
-        set_cell_value(civ_sheet, civ_row, 9, item["address_name"])
-        set_cell_value(civ_sheet, civ_row, 10, item["address"])
-        set_cell_value(civ_sheet, civ_row, 11, item["note"])
+#         # Fill CIV
+#         set_cell_value(civ_sheet, civ_row, 1, "=ROW()-ROW($A$14)+1")
+#         set_cell_value(civ_sheet, civ_row, 2, item["HS_CODE"])
+#         set_cell_value(civ_sheet, civ_row, 3, item["DESCRIPTION"])
+#         set_cell_value(civ_sheet, civ_row, 4, item["quanity"])
+#         set_cell_value(civ_sheet, civ_row, 5, item["danwei"])
+#         set_cell_value(civ_sheet, civ_row, 6, item["unit_price"])
+#         set_cell_value(civ_sheet, civ_row, 7, round(item["total_price"]))
+#         set_cell_value(civ_sheet, civ_row, 8, item["texture"])
+#         set_cell_value(civ_sheet, civ_row, 9, item["address_name"])
+#         set_cell_value(civ_sheet, civ_row, 10, item["address"])
+#         set_cell_value(civ_sheet, civ_row, 11, item["note"])
 
-        civ_sheet.autoFitRow(civ_row - 1)
-
-
-        # Fill PL
-        set_cell_value(pl_sheet, pl_row, 1, "=ROW()-ROW($A$13)+1")
-
-        set_cell_value(pl_sheet, pl_row, 2, item["HS_CODE"])
-
-        set_cell_value(pl_sheet, pl_row, 3, item["DESCRIPTION"])
-        set_cell_value(pl_sheet, pl_row, 4, item["quanity"])
-        set_cell_value(pl_sheet, pl_row, 5, item["danwei"])
-        set_cell_value(pl_sheet, pl_row, 6, item["carton"])
-        set_cell_value(pl_sheet, pl_row, 8, item["net_weight"])
-        set_cell_value(pl_sheet, pl_row, 9, item["GrossWeight"])
-        set_cell_value(pl_sheet, pl_row, 10, item["Volume"])
-        pl_sheet.autoFitRow(pl_row - 1)
-
-        # Fill 豁免说明
-        set_cell_value(huomian_explaination_sheet, huomian_row, 1, item["HS_CODE"])
-        set_cell_value(huomian_explaination_sheet, huomian_row, 2, item["DESCRIPTION"])
-        set_cell_value(huomian_explaination_sheet, huomian_row, 3, item["usage"])
-        set_cell_value(huomian_explaination_sheet, huomian_row, 4, item["note"])
-        set_cell_value(huomian_explaination_sheet, huomian_row, 5, item["note_explaination"])
-        if item["huomian_file_name"]:
-            pic_path = os.path.join("./file/huomian_file/",item["huomian_file_name"])
-
-            all_pic_path.append({"pic_path":pic_path,"new_name":item['DESCRIPTION']})
-        huomian_explaination_sheet.autoFitRow(huomian_row - 1)
-
-        if index  == len(data) - 1 :
-            #如果是最后一个循环的数据，则不需要再添加一行了
-            break
-        # 在每个循环结束时增加一行，以避免覆盖
-        # print(civ_sheet.getCells().get(civ_row, 2).getValue())
-        if civ_sheet.getCells().get(civ_row + 1, 2).getValue() == "TOTAL":
-            civ_sheet.getCells().insertRows(civ_row, 1)
-        if pl_sheet.getCells().get(pl_row+ 1, 2).getValue() == "TOTAL":
-
-            pl_sheet.getCells().insertRows(pl_row, 1)
-        # pl_sheet.getCells().insertRows(pl_row, 1)
-
-        # civ_sheet.getCells().insertRows(civ_row, 1)
-        huomian_explaination_sheet.getCells().insertRows(huomian_row, 1)
-
-    civ_sheet.getCells().hideColumn(5)
+#         civ_sheet.autoFitRow(civ_row - 1)
 
 
-    # Save the Excel file
-    output_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}.xlsx"
-    wb.calculateFormula()
-    wb.save(output_path, SaveFormat.XLSX)
-    print(f"Excel file generated: {output_path}")
+#         # Fill PL
+#         set_cell_value(pl_sheet, pl_row, 1, "=ROW()-ROW($A$13)+1")
 
-    # 生成 PDF 文件
-    pdf_path = excel2pdf(output_path, 'pdf')
+#         set_cell_value(pl_sheet, pl_row, 2, item["HS_CODE"])
 
-    # 压缩图片和PDF文件
-    # if all_pic_path:
-    #     zip_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}.zip"
-    #     with zipfile.ZipFile(zip_path, 'w') as zipf:
-    #         zipf.write(pdf_path, os.path.basename(pdf_path))
-    #         for index, item in enumerate(all_pic_path):
-    #             pic_path = item['pic_path']
-    #             new_pic_name = os.path.join(os.path.dirname(pic_path),item['new_name']+".png")
-    #             zipf.write(pic_path, new_pic_name)
-    #     logger.info(f"zip文件已成功生成: {zip_path}")
-    #     return zip_path
-    logger.info(f"pdf文件已成功生成: {pdf_path}")
-    return pdf_path
+#         set_cell_value(pl_sheet, pl_row, 3, item["DESCRIPTION"])
+#         set_cell_value(pl_sheet, pl_row, 4, item["quanity"])
+#         set_cell_value(pl_sheet, pl_row, 5, item["danwei"])
+#         set_cell_value(pl_sheet, pl_row, 6, item["carton"])
+#         set_cell_value(pl_sheet, pl_row, 8, item["net_weight"])
+#         set_cell_value(pl_sheet, pl_row, 9, item["GrossWeight"])
+#         set_cell_value(pl_sheet, pl_row, 10, item["Volume"])
+#         pl_sheet.autoFitRow(pl_row - 1)
 
-def generate_excel_from_template_canada(data,totalyugutax,currentcy_type="CAD"):
-    apcelllic = License()
-    apcelllic.setLicense('JAVA-Aspose.Excel-24.7/license.xml')
-    template_path = "./file/excel_template/加拿大-清关发票箱单开发模板-0410.xlsx"
-    wb = Workbook(template_path)
-    civ_sheet = wb.getWorksheets().get("CIV")
-    pl_sheet = wb.getWorksheets().get("PL")
+#         # Fill 豁免说明
+#         set_cell_value(huomian_explaination_sheet, huomian_row, 1, item["HS_CODE"])
+#         set_cell_value(huomian_explaination_sheet, huomian_row, 2, item["DESCRIPTION"])
+#         set_cell_value(huomian_explaination_sheet, huomian_row, 3, item["usage"])
+#         set_cell_value(huomian_explaination_sheet, huomian_row, 4, item["note"])
+#         set_cell_value(huomian_explaination_sheet, huomian_row, 5, item["note_explaination"])
+#         if item["huomian_file_name"]:
+#             pic_path = os.path.join("./file/huomian_file/",item["huomian_file_name"])
+
+#             all_pic_path.append({"pic_path":pic_path,"new_name":item['DESCRIPTION']})
+#         huomian_explaination_sheet.autoFitRow(huomian_row - 1)
+
+#         if index  == len(data) - 1 :
+#             #如果是最后一个循环的数据，则不需要再添加一行了
+#             break
+#         # 在每个循环结束时增加一行，以避免覆盖
+#         # print(civ_sheet.getCells().get(civ_row, 2).getValue())
+#         if civ_sheet.getCells().get(civ_row + 1, 2).getValue() == "TOTAL":
+#             civ_sheet.getCells().insertRows(civ_row, 1)
+#         if pl_sheet.getCells().get(pl_row+ 1, 2).getValue() == "TOTAL":
+
+#             pl_sheet.getCells().insertRows(pl_row, 1)
+#         # pl_sheet.getCells().insertRows(pl_row, 1)
+
+#         # civ_sheet.getCells().insertRows(civ_row, 1)
+#         huomian_explaination_sheet.getCells().insertRows(huomian_row, 1)
+
+#     civ_sheet.getCells().hideColumn(5)
+
+
+#     # Save the Excel file
+#     output_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}.xlsx"
+#     wb.calculateFormula()
+#     wb.save(output_path, SaveFormat.XLSX)
+#     print(f"Excel file generated: {output_path}")
+
+#     # 生成 PDF 文件
+#     pdf_path = excel2pdf(output_path, 'pdf')
+
+#     # 压缩图片和PDF文件
+#     # if all_pic_path:
+#     #     zip_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}.zip"
+#     #     with zipfile.ZipFile(zip_path, 'w') as zipf:
+#     #         zipf.write(pdf_path, os.path.basename(pdf_path))
+#     #         for index, item in enumerate(all_pic_path):
+#     #             pic_path = item['pic_path']
+#     #             new_pic_name = os.path.join(os.path.dirname(pic_path),item['new_name']+".png")
+#     #             zipf.write(pic_path, new_pic_name)
+#     #     logger.info(f"zip文件已成功生成: {zip_path}")
+#     #     return zip_path
+#     logger.info(f"pdf文件已成功生成: {pdf_path}")
+#     return pdf_path
+
+# def generate_excel_from_template_canada(data,totalyugutax,currentcy_type="CAD"):
+#     apcelllic = License()
+#     apcelllic.setLicense('JAVA-Aspose.Excel-24.7/license.xml')
+#     template_path = "./file/excel_template/加拿大-清关发票箱单开发模板-0410.xlsx"
+#     wb = Workbook(template_path)
+#     civ_sheet = wb.getWorksheets().get("CIV")
+#     pl_sheet = wb.getWorksheets().get("PL")
    
 
     
 
-    def set_cell_value(sheet, row, column, value):
-        cell = sheet.getCells().get(row - 1, column - 1)  # Adjust for zero-based index
+#     def set_cell_value(sheet, row, column, value):
+#         cell = sheet.getCells().get(row - 1, column - 1)  # Adjust for zero-based index
         
-        if isinstance(value, str) and value.startswith('='):
-            # 如果 value 是一个公式
-            cell.setFormula(value)
-        else:
-            # 否则，设置为普通值
-            cell.putValue(value)
+#         if isinstance(value, str) and value.startswith('='):
+#             # 如果 value 是一个公式
+#             cell.setFormula(value)
+#         else:
+#             # 否则，设置为普通值
+#             cell.putValue(value)
         
-        style = cell.getStyle()
-        style.setTextWrapped(True)
-        style.setHorizontalAlignment(TextAlignmentType.CENTER)
-        style.setVerticalAlignment(TextAlignmentType.CENTER)
-        cell.setStyle(style)
+#         style = cell.getStyle()
+#         style.setTextWrapped(True)
+#         style.setHorizontalAlignment(TextAlignmentType.CENTER)
+#         style.setVerticalAlignment(TextAlignmentType.CENTER)
+#         cell.setStyle(style)
 
 
-        # Auto-adjust row height
-        # Adjust based on value length, e.g., number of lines
-        # num_lines = value.count("\n") + 1
-        # if num_lines > 1:
-        #     sheet.getCells().setRowHeight(row - 1, num_lines * 15)
+#         # Auto-adjust row height
+#         # Adjust based on value length, e.g., number of lines
+#         # num_lines = value.count("\n") + 1
+#         # if num_lines > 1:
+#         #     sheet.getCells().setRowHeight(row - 1, num_lines * 15)
 
-    # Fill CIV content
-    # set_cell_value(civ_sheet, 1, 1, data[0]["shipper_name"])
-    # set_cell_value(civ_sheet, 2, 1, data[0]["shipper_address"])
-    # set_cell_value(civ_sheet, 6, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
+#     # Fill CIV content
+#     # set_cell_value(civ_sheet, 1, 1, data[0]["shipper_name"])
+#     # set_cell_value(civ_sheet, 2, 1, data[0]["shipper_address"])
+#     # set_cell_value(civ_sheet, 6, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
 
-    today_minus_5 = datetime.now() - timedelta(days=5)
-    formatted_date = today_minus_5.strftime("%Y%m%d")
-    random_number = random.randint(1000, 9999)
-    result_1 = f"{formatted_date}{random_number}"
-    set_cell_value(civ_sheet, 5, 8, result_1)
-    set_cell_value(civ_sheet, 6, 8, result_1)
-    set_cell_value(civ_sheet, 7, 8, datetime.now().strftime("%Y/%m/%d"))
-    set_cell_value(civ_sheet, 9, 8, currentcy_type)
-    # if data[0]["export_country"] == "Vietnam":
-    #     set_cell_value(civ_sheet, 9, 9, "MADE IN VIETNAM")
-    #     set_cell_value(pl_sheet, 8, 9, "MADE IN VIETNAM")
-    # set_cell_value(pl_sheet, 1, 1, data[0]["shipper_name"])
-    # set_cell_value(pl_sheet, 2, 1, data[0]["shipper_address"])
-    # set_cell_value(pl_sheet, 5, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
+#     today_minus_5 = datetime.now() - timedelta(days=5)
+#     formatted_date = today_minus_5.strftime("%Y%m%d")
+#     random_number = random.randint(1000, 9999)
+#     result_1 = f"{formatted_date}{random_number}"
+#     set_cell_value(civ_sheet, 5, 8, result_1)
+#     set_cell_value(civ_sheet, 6, 8, result_1)
+#     set_cell_value(civ_sheet, 7, 8, datetime.now().strftime("%Y/%m/%d"))
+#     set_cell_value(civ_sheet, 9, 8, currentcy_type)
+#     # if data[0]["export_country"] == "Vietnam":
+#     #     set_cell_value(civ_sheet, 9, 9, "MADE IN VIETNAM")
+#     #     set_cell_value(pl_sheet, 8, 9, "MADE IN VIETNAM")
+#     # set_cell_value(pl_sheet, 1, 1, data[0]["shipper_name"])
+#     # set_cell_value(pl_sheet, 2, 1, data[0]["shipper_address"])
+#     # set_cell_value(pl_sheet, 5, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
 
-    set_cell_value(pl_sheet, 5, 8, result_1)
-    set_cell_value(pl_sheet, 6, 8, result_1)
-    set_cell_value(pl_sheet, 7, 8, datetime.now().strftime("%Y/%m/%d"))
+#     set_cell_value(pl_sheet, 5, 8, result_1)
+#     set_cell_value(pl_sheet, 6, 8, result_1)
+#     set_cell_value(pl_sheet, 7, 8, datetime.now().strftime("%Y/%m/%d"))
 
-    # if data[0]["execute_type"] == "Sea":
-    #     set_cell_value(civ_sheet, 9, 2, "")
-    #     set_cell_value(civ_sheet, 10, 2, "US BY SEA")
-    #     set_cell_value(pl_sheet, 8, 2, "")
-    #     set_cell_value(pl_sheet, 9, 2, "US BY SEA")
+#     # if data[0]["execute_type"] == "Sea":
+#     #     set_cell_value(civ_sheet, 9, 2, "")
+#     #     set_cell_value(civ_sheet, 10, 2, "US BY SEA")
+#     #     set_cell_value(pl_sheet, 8, 2, "")
+#     #     set_cell_value(pl_sheet, 9, 2, "US BY SEA")
     
     
-    all_pic_path = []
-    for index, item in enumerate(data):
-        civ_row = 13 + index
-        pl_row = 13 + index
+#     all_pic_path = []
+#     for index, item in enumerate(data):
+#         civ_row = 13 + index
+#         pl_row = 13 + index
 
 
-        # Fill CIV
-        set_cell_value(civ_sheet, civ_row, 1, "=ROW()-ROW($A$13)+1")
-        set_cell_value(civ_sheet, civ_row, 2, item["HS_CODE"])
-        set_cell_value(civ_sheet, civ_row, 3, item["DESCRIPTION"])
-        set_cell_value(civ_sheet, civ_row, 4, item["quanity"])
-        set_cell_value(civ_sheet, civ_row, 5, item["danwei"])
-        set_cell_value(civ_sheet, civ_row, 6, item["unit_price"])
-        set_cell_value(civ_sheet, civ_row, 7, round(item["total_price"]))
-        set_cell_value(civ_sheet, civ_row, 8, item["texture"])
-        # set_cell_value(civ_sheet, civ_row, 9, item["address_name"])
-        # set_cell_value(civ_sheet, civ_row, 10, item["address"])
-        set_cell_value(civ_sheet, civ_row, 9, item["note"])
+#         # Fill CIV
+#         set_cell_value(civ_sheet, civ_row, 1, "=ROW()-ROW($A$13)+1")
+#         set_cell_value(civ_sheet, civ_row, 2, item["HS_CODE"])
+#         set_cell_value(civ_sheet, civ_row, 3, item["DESCRIPTION"])
+#         set_cell_value(civ_sheet, civ_row, 4, item["quanity"])
+#         set_cell_value(civ_sheet, civ_row, 5, item["danwei"])
+#         set_cell_value(civ_sheet, civ_row, 6, item["unit_price"])
+#         set_cell_value(civ_sheet, civ_row, 7, round(item["total_price"]))
+#         set_cell_value(civ_sheet, civ_row, 8, item["texture"])
+#         # set_cell_value(civ_sheet, civ_row, 9, item["address_name"])
+#         # set_cell_value(civ_sheet, civ_row, 10, item["address"])
+#         set_cell_value(civ_sheet, civ_row, 9, item["note"])
 
-        civ_sheet.autoFitRow(civ_row - 1)
+#         civ_sheet.autoFitRow(civ_row - 1)
 
 
-        # Fill PL
-        set_cell_value(pl_sheet, pl_row, 1, "=ROW()-ROW($A$13)+1")
+#         # Fill PL
+#         set_cell_value(pl_sheet, pl_row, 1, "=ROW()-ROW($A$13)+1")
 
-        set_cell_value(pl_sheet, pl_row, 2, item["HS_CODE"])
+#         set_cell_value(pl_sheet, pl_row, 2, item["HS_CODE"])
 
-        set_cell_value(pl_sheet, pl_row, 3, item["DESCRIPTION"])
-        set_cell_value(pl_sheet, pl_row, 4, item["quanity"])
-        set_cell_value(pl_sheet, pl_row, 5, item["danwei"])
-        set_cell_value(pl_sheet, pl_row, 6, item["carton"])
-        set_cell_value(pl_sheet, pl_row, 8, item["net_weight"])
-        set_cell_value(pl_sheet, pl_row, 9, item["GrossWeight"])
-        set_cell_value(pl_sheet, pl_row, 10, item["Volume"])
-        pl_sheet.autoFitRow(pl_row - 1)
+#         set_cell_value(pl_sheet, pl_row, 3, item["DESCRIPTION"])
+#         set_cell_value(pl_sheet, pl_row, 4, item["quanity"])
+#         set_cell_value(pl_sheet, pl_row, 5, item["danwei"])
+#         set_cell_value(pl_sheet, pl_row, 6, item["carton"])
+#         set_cell_value(pl_sheet, pl_row, 8, item["net_weight"])
+#         set_cell_value(pl_sheet, pl_row, 9, item["GrossWeight"])
+#         set_cell_value(pl_sheet, pl_row, 10, item["Volume"])
+#         pl_sheet.autoFitRow(pl_row - 1)
 
-        # Fill 豁免说明
+#         # Fill 豁免说明
       
-        if item["huomian_file_name"]:
-            pic_path = os.path.join("./file/huomian_file/",item["huomian_file_name"])
+#         if item["huomian_file_name"]:
+#             pic_path = os.path.join("./file/huomian_file/",item["huomian_file_name"])
 
-            all_pic_path.append({"pic_path":pic_path,"new_name":item['DESCRIPTION']})
+#             all_pic_path.append({"pic_path":pic_path,"new_name":item['DESCRIPTION']})
 
-        if index  == len(data) - 1 :
-            #如果是最后一个循环的数据，则不需要再添加一行了
-            break
-        # 在每个循环结束时增加一行，以避免覆盖
-        # print(civ_sheet.getCells().get(civ_row, 2).getValue())
-        if civ_sheet.getCells().get(civ_row + 1, 2).getValue() == "TOTAL":
-            civ_sheet.getCells().insertRows(civ_row, 1)
-        if pl_sheet.getCells().get(pl_row+ 1, 2).getValue() == "TOTAL":
+#         if index  == len(data) - 1 :
+#             #如果是最后一个循环的数据，则不需要再添加一行了
+#             break
+#         # 在每个循环结束时增加一行，以避免覆盖
+#         # print(civ_sheet.getCells().get(civ_row, 2).getValue())
+#         if civ_sheet.getCells().get(civ_row + 1, 2).getValue() == "TOTAL":
+#             civ_sheet.getCells().insertRows(civ_row, 1)
+#         if pl_sheet.getCells().get(pl_row+ 1, 2).getValue() == "TOTAL":
 
-            pl_sheet.getCells().insertRows(pl_row, 1)
-        # pl_sheet.getCells().insertRows(pl_row, 1)
+#             pl_sheet.getCells().insertRows(pl_row, 1)
+#         # pl_sheet.getCells().insertRows(pl_row, 1)
 
-        # civ_sheet.getCells().insertRows(civ_row, 1)
+#         # civ_sheet.getCells().insertRows(civ_row, 1)
 
-    civ_sheet.getCells().hideColumn(5)
+#     civ_sheet.getCells().hideColumn(5)
 
 
-    # Save the Excel file
-    output_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}.xlsx"
-    wb.calculateFormula()
-    wb.save(output_path, SaveFormat.XLSX)
-    print(f"Excel file generated: {output_path}")
+#     # Save the Excel file
+#     output_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}.xlsx"
+#     wb.calculateFormula()
+#     wb.save(output_path, SaveFormat.XLSX)
+#     print(f"Excel file generated: {output_path}")
 
-    # 生成 PDF 文件
-    pdf_path = excel2pdf(output_path, 'pdf')
+#     # 生成 PDF 文件
+#     pdf_path = excel2pdf(output_path, 'pdf')
 
-    # 压缩图片和PDF文件
-    # if all_pic_path:
-    #     zip_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}.zip"
-    #     with zipfile.ZipFile(zip_path, 'w') as zipf:
-    #         zipf.write(pdf_path, os.path.basename(pdf_path))
-    #         for index, item in enumerate(all_pic_path):
-    #             pic_path = item['pic_path']
-    #             new_pic_name = os.path.join(os.path.dirname(pic_path),item['new_name']+".png")
-    #             zipf.write(pic_path, new_pic_name)
-    #     logger.info(f"zip文件已成功生成: {zip_path}")
-    #     return zip_path
-    logger.info(f"pdf文件已成功生成: {pdf_path}")
-    return pdf_path
+#     # 压缩图片和PDF文件
+#     # if all_pic_path:
+#     #     zip_path = f"file/{time.time()}-{data[0]['MasterBillNo']} CI&PL-{totalyugutax}.zip"
+#     #     with zipfile.ZipFile(zip_path, 'w') as zipf:
+#     #         zipf.write(pdf_path, os.path.basename(pdf_path))
+#     #         for index, item in enumerate(all_pic_path):
+#     #             pic_path = item['pic_path']
+#     #             new_pic_name = os.path.join(os.path.dirname(pic_path),item['new_name']+".png")
+#     #             zipf.write(pic_path, new_pic_name)
+#     #     logger.info(f"zip文件已成功生成: {zip_path}")
+#     #     return zip_path
+#     logger.info(f"pdf文件已成功生成: {pdf_path}")
+#     return pdf_path
 
-def generate_excel_from_template(data):
-    template_path = r"清关发票箱单模板.xlsx"
-    # 读取模板文件
-    wb = openpyxl.load_workbook(template_path)
-    civ_sheet = wb["CIV"]
-    pl_sheet = wb["PL"]
-    huomian_explaination_sheet = wb['豁免说明']
-    start_row = 13
+# def generate_excel_from_template(data):
+#     template_path = r"清关发票箱单模板.xlsx"
+#     # 读取模板文件
+#     wb = openpyxl.load_workbook(template_path)
+#     civ_sheet = wb["CIV"]
+#     pl_sheet = wb["PL"]
+#     huomian_explaination_sheet = wb['豁免说明']
+#     start_row = 13
     
 
-    def set_cell_value(sheet, row, column, value):
-        cell = sheet.cell(row=row, column=column)
-        # 检查是否为合并单元格，如果是，只在左上角单元格写入值
-        if cell.coordinate in sheet.merged_cells:
-            for merged_range in sheet.merged_cells.ranges:
-                if cell.coordinate in merged_range:
-                    top_left_cell = merged_range.start_cell
-                    sheet[top_left_cell.coordinate].value = value
-                    sheet[top_left_cell.coordinate].alignment = Alignment(wrap_text=True, horizontal='center', vertical='center')
-                    break
-        else:
-            cell.value = value
-            cell.alignment = Alignment(wrap_text=True, horizontal='center', vertical='center')
+#     def set_cell_value(sheet, row, column, value):
+#         cell = sheet.cell(row=row, column=column)
+#         # 检查是否为合并单元格，如果是，只在左上角单元格写入值
+#         if cell.coordinate in sheet.merged_cells:
+#             for merged_range in sheet.merged_cells.ranges:
+#                 if cell.coordinate in merged_range:
+#                     top_left_cell = merged_range.start_cell
+#                     sheet[top_left_cell.coordinate].value = value
+#                     sheet[top_left_cell.coordinate].alignment = Alignment(wrap_text=True, horizontal='center', vertical='center')
+#                     break
+#         else:
+#             cell.value = value
+#             cell.alignment = Alignment(wrap_text=True, horizontal='center', vertical='center')
 
-        # 自动调整行高
-        wrap_length = 30  # 根据需要调整换行长度
-        lines = textwrap.wrap(str(value), wrap_length)
-        num_lines = len(lines)
-        # 只有在内容需要换行时才调整行高
-        if num_lines > 1:
-            sheet.row_dimensions[row].height = num_lines * 15
+#         # 自动调整行高
+#         wrap_length = 30  # 根据需要调整换行长度
+#         lines = textwrap.wrap(str(value), wrap_length)
+#         num_lines = len(lines)
+#         # 只有在内容需要换行时才调整行高
+#         if num_lines > 1:
+#             sheet.row_dimensions[row].height = num_lines * 15
 
  
 
-    # 填充 CIV 一次内容
-    set_cell_value(civ_sheet, 1, 1, data[0]["shipper_name"])
-    set_cell_value(civ_sheet, 2, 1, data[0]["shipper_address"])
-    set_cell_value(civ_sheet, 6, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
+#     # 填充 CIV 一次内容
+#     set_cell_value(civ_sheet, 1, 1, data[0]["shipper_name"])
+#     set_cell_value(civ_sheet, 2, 1, data[0]["shipper_address"])
+#     set_cell_value(civ_sheet, 6, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
 
-    today_minus_5 = datetime.now() - timedelta(days=5)
-    formatted_date = today_minus_5.strftime("%Y%m%d")
-    random_number = random.randint(1000, 9999)
-    result_1 = f"{formatted_date}{random_number}"
-    set_cell_value(civ_sheet, 6, 8, result_1)
-    set_cell_value(civ_sheet, 7, 8, result_1)
-    set_cell_value(civ_sheet, 8, 8, datetime.now().strftime("%Y/%m/%d"))
+#     today_minus_5 = datetime.now() - timedelta(days=5)
+#     formatted_date = today_minus_5.strftime("%Y%m%d")
+#     random_number = random.randint(1000, 9999)
+#     result_1 = f"{formatted_date}{random_number}"
+#     set_cell_value(civ_sheet, 6, 8, result_1)
+#     set_cell_value(civ_sheet, 7, 8, result_1)
+#     set_cell_value(civ_sheet, 8, 8, datetime.now().strftime("%Y/%m/%d"))
 
-    set_cell_value(pl_sheet, 1, 1, data[0]["shipper_name"])
-    set_cell_value(pl_sheet, 2, 1, data[0]["shipper_address"])
-    set_cell_value(pl_sheet, 5, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
+#     set_cell_value(pl_sheet, 1, 1, data[0]["shipper_name"])
+#     set_cell_value(pl_sheet, 2, 1, data[0]["shipper_address"])
+#     set_cell_value(pl_sheet, 5, 1, f"{data[0]['receiver_name']}\n{data[0]['receiver_address']}")
 
-    set_cell_value(pl_sheet, 5, 8, result_1)
-    set_cell_value(pl_sheet, 6, 8, result_1)
-    set_cell_value(pl_sheet, 7, 8, datetime.now().strftime("%Y/%m/%d"))
+#     set_cell_value(pl_sheet, 5, 8, result_1)
+#     set_cell_value(pl_sheet, 6, 8, result_1)
+#     set_cell_value(pl_sheet, 7, 8, datetime.now().strftime("%Y/%m/%d"))
 
-    if data[0]["execute_type"] == "Sea":
-        set_cell_value(civ_sheet, 9, 2, "")
-        set_cell_value(civ_sheet, 10, 2, "US BY SEA")
-        set_cell_value(pl_sheet, 8, 2, "")
-        set_cell_value(pl_sheet, 9, 2, "US BY SEA")
+#     if data[0]["execute_type"] == "Sea":
+#         set_cell_value(civ_sheet, 9, 2, "")
+#         set_cell_value(civ_sheet, 10, 2, "US BY SEA")
+#         set_cell_value(pl_sheet, 8, 2, "")
+#         set_cell_value(pl_sheet, 9, 2, "US BY SEA")
 
-    for index, item in enumerate(data):
-        civ_row = 14 + index
-        huomian_row = 5 + index
-        pl_row = start_row + index
+#     for index, item in enumerate(data):
+#         civ_row = 14 + index
+#         huomian_row = 5 + index
+#         pl_row = start_row + index
 
-        # 如果行数超出最大值，在最大行上方插入新行
-        # civ_row = insert_row_if_needed(civ_sheet, civ_row, civ_max_row)
-        # huomian_row = insert_row_if_needed(huomian_explaination_sheet, huomian_row, huomian_max_row)
-        # pl_row = insert_row_if_needed(pl_sheet, pl_row, pl_max_row)
+#         # 如果行数超出最大值，在最大行上方插入新行
+#         # civ_row = insert_row_if_needed(civ_sheet, civ_row, civ_max_row)
+#         # huomian_row = insert_row_if_needed(huomian_explaination_sheet, huomian_row, huomian_max_row)
+#         # pl_row = insert_row_if_needed(pl_sheet, pl_row, pl_max_row)
 
-        # 填充 CIV
-        set_cell_value(civ_sheet, civ_row, 1, item["HS_CODE"])
-        set_cell_value(civ_sheet, civ_row, 2, item["DESCRIPTION"])
-        set_cell_value(civ_sheet, civ_row, 3, item["quanity"])
-        set_cell_value(civ_sheet, civ_row, 4, item["danwei"])
-        set_cell_value(civ_sheet, civ_row, 5, item["unit_price"])
-        set_cell_value(civ_sheet, civ_row, 6, item["total_price"])
-        set_cell_value(civ_sheet, civ_row, 7, item["texture"])
-        set_cell_value(civ_sheet, civ_row, 8, item["address_name"])
-        set_cell_value(civ_sheet, civ_row, 9, item["address"])
-        set_cell_value(civ_sheet, civ_row, 10, item["note"])
+#         # 填充 CIV
+#         set_cell_value(civ_sheet, civ_row, 1, item["HS_CODE"])
+#         set_cell_value(civ_sheet, civ_row, 2, item["DESCRIPTION"])
+#         set_cell_value(civ_sheet, civ_row, 3, item["quanity"])
+#         set_cell_value(civ_sheet, civ_row, 4, item["danwei"])
+#         set_cell_value(civ_sheet, civ_row, 5, item["unit_price"])
+#         set_cell_value(civ_sheet, civ_row, 6, item["total_price"])
+#         set_cell_value(civ_sheet, civ_row, 7, item["texture"])
+#         set_cell_value(civ_sheet, civ_row, 8, item["address_name"])
+#         set_cell_value(civ_sheet, civ_row, 9, item["address"])
+#         set_cell_value(civ_sheet, civ_row, 10, item["note"])
 
-        # 填充 PL
-        set_cell_value(pl_sheet, pl_row, 2, item["DESCRIPTION"])
-        set_cell_value(pl_sheet, pl_row, 3, item["quanity"])
-        set_cell_value(pl_sheet, pl_row, 4, item["danwei"])
-        set_cell_value(pl_sheet, pl_row, 5, item["carton"])
-        set_cell_value(pl_sheet, pl_row, 7, item["net_weight"])
-        set_cell_value(pl_sheet, pl_row, 8, item["GrossWeight"])
-        set_cell_value(pl_sheet, pl_row, 9, item["Volume"])
+#         # 填充 PL
+#         set_cell_value(pl_sheet, pl_row, 2, item["DESCRIPTION"])
+#         set_cell_value(pl_sheet, pl_row, 3, item["quanity"])
+#         set_cell_value(pl_sheet, pl_row, 4, item["danwei"])
+#         set_cell_value(pl_sheet, pl_row, 5, item["carton"])
+#         set_cell_value(pl_sheet, pl_row, 7, item["net_weight"])
+#         set_cell_value(pl_sheet, pl_row, 8, item["GrossWeight"])
+#         set_cell_value(pl_sheet, pl_row, 9, item["Volume"])
 
-        # 填充豁免说明
-        set_cell_value(huomian_explaination_sheet, huomian_row, 1, item["HS_CODE"])
-        set_cell_value(huomian_explaination_sheet, huomian_row, 2, item["DESCRIPTION"])
-        set_cell_value(huomian_explaination_sheet, huomian_row, 3, item["note"])
-        set_cell_value(huomian_explaination_sheet, huomian_row, 4, item["note_explaination"])
+#         # 填充豁免说明
+#         set_cell_value(huomian_explaination_sheet, huomian_row, 1, item["HS_CODE"])
+#         set_cell_value(huomian_explaination_sheet, huomian_row, 2, item["DESCRIPTION"])
+#         set_cell_value(huomian_explaination_sheet, huomian_row, 3, item["note"])
+#         set_cell_value(huomian_explaination_sheet, huomian_row, 4, item["note_explaination"])
 
-    # 保存新的 Excel 文件
-    output_path = f"file/{data[0]['MasterBillNo']} CI&PL.xlsx"
-    wb.save(output_path)
-    logger.info(f"excel文件已成功生成: {output_path}")
+#     # 保存新的 Excel 文件
+#     output_path = f"file/{data[0]['MasterBillNo']} CI&PL.xlsx"
+#     wb.save(output_path)
+#     logger.info(f"excel文件已成功生成: {output_path}")
 
-    # 生成 PDF 文件
-    pdf_path = excel2pdf(output_path, 'pdf')
-    logger.info(f"pdf文件已成功生成: {pdf_path}")
+#     # 生成 PDF 文件
+#     pdf_path = excel2pdf(output_path, 'pdf')
+#     logger.info(f"pdf文件已成功生成: {pdf_path}")
     
-    return pdf_path
+#     return pdf_path
 
-def excel2pdf(excel_path: str, pdf_save_path: str = None) -> str:
-    # 加载License文件
-    apcelllic = License()
-    apcelllic.setLicense('JAVA-Aspose.Excel-24.7/license.xml')
+# def excel2pdf(excel_path: str, pdf_save_path: str = None) -> str:
+#     # 加载License文件
+#     apcelllic = License()
+#     apcelllic.setLicense('JAVA-Aspose.Excel-24.7/license.xml')
 
-    # 打开Excel文件
-    wb = Workbook(excel_path)
-    # 删除名称为 "Evaluation Warning" 的工作表（如果存在）
-    sheets = wb.getWorksheets()
-    eval_warning_sheet = sheets.get("Evaluation Warning")
-    if eval_warning_sheet is not None:
-        sheets.removeAt("Evaluation Warning")
-    # 配置PDF保存选项
-    saveOption = PdfSaveOptions()
+#     # 打开Excel文件
+#     wb = Workbook(excel_path)
+#     # 删除名称为 "Evaluation Warning" 的工作表（如果存在）
+#     sheets = wb.getWorksheets()
+#     eval_warning_sheet = sheets.get("Evaluation Warning")
+#     if eval_warning_sheet is not None:
+#         sheets.removeAt("Evaluation Warning")
+#     # 配置PDF保存选项
+#     saveOption = PdfSaveOptions()
     
-    # 确保每个工作表单独保存为一个PDF页面
-    # saveOption.setOnePagePerSheet(True)  # 如果为True，将整个工作表压缩到一个PDF页面上
-    saveOption.setAllColumnsInOnePagePerSheet(True) #所有列在一页，但是可能行在多页
+#     # 确保每个工作表单独保存为一个PDF页面
+#     # saveOption.setOnePagePerSheet(True)  # 如果为True，将整个工作表压缩到一个PDF页面上
+#     saveOption.setAllColumnsInOnePagePerSheet(True) #所有列在一页，但是可能行在多页
 
-    # 计算公式
-    saveOption.setCalculateFormula(True)  # 计算公式并将其值保存在PDF中
+#     # 计算公式
+#     saveOption.setCalculateFormula(True)  # 计算公式并将其值保存在PDF中
 
-    # 设置字体相关选项
-    saveOption.setCheckWorkbookDefaultFont(True)  # 检查工作簿的默认字体，以避免出现方块字符
-    saveOption.setCheckFontCompatibility(True)  # 检查每个字符的字体兼容性
-    saveOption.setDefaultFont("Arial")  # 设置默认字体（如果未设置正确的字体）
+#     # 设置字体相关选项
+#     saveOption.setCheckWorkbookDefaultFont(True)  # 检查工作簿的默认字体，以避免出现方块字符
+#     saveOption.setCheckFontCompatibility(True)  # 检查每个字符的字体兼容性
+#     saveOption.setDefaultFont("Arial")  # 设置默认字体（如果未设置正确的字体）
 
-    # 设置图像处理
-    saveOption.setImageResample(220, 85)  # 设置图像的PPI和JPEG质量，减少PDF文件大小
+#     # 设置图像处理
+#     saveOption.setImageResample(220, 85)  # 设置图像的PPI和JPEG质量，减少PDF文件大小
 
-    # 设置其他相关选项
-    saveOption.setEmbedStandardWindowsFonts(True)  # 嵌入标准的Windows字体
-    saveOption.setClearData(False)  # 在保存后不清除工作簿的数据
-    saveOption.setCompliance(0)  # 设置PDF标准合规级别，如需要合规的PDF/A等格式
-    saveOption.setDisplayDocTitle(True)  # 在PDF窗口的标题栏显示文档标题
+#     # 设置其他相关选项
+#     saveOption.setEmbedStandardWindowsFonts(True)  # 嵌入标准的Windows字体
+#     saveOption.setClearData(False)  # 在保存后不清除工作簿的数据
+#     saveOption.setCompliance(0)  # 设置PDF标准合规级别，如需要合规的PDF/A等格式
+#     saveOption.setDisplayDocTitle(True)  # 在PDF窗口的标题栏显示文档标题
 
-    # 如果没有指定保存路径，则使用与 Excel 文件相同的路径
-    if pdf_save_path is None:
-        pdf_save_path = os.path.dirname(excel_path)
+#     # 如果没有指定保存路径，则使用与 Excel 文件相同的路径
+#     if pdf_save_path is None:
+#         pdf_save_path = os.path.dirname(excel_path)
     
-    # 获取Excel文件的文件名（不含扩展名）
-    excel_name = os.path.splitext(os.path.basename(excel_path))[0]
+#     # 获取Excel文件的文件名（不含扩展名）
+#     excel_name = os.path.splitext(os.path.basename(excel_path))[0]
     
-    # 设置PDF文件的完整保存路径
-    pdf_file = os.path.join(pdf_save_path, f"{excel_name}.pdf")
+#     # 设置PDF文件的完整保存路径
+#     pdf_file = os.path.join(pdf_save_path, f"{excel_name}.pdf")
 
-    # 保存为PDF
-    wb.save(pdf_file, saveOption)
+#     # 保存为PDF
+#     wb.save(pdf_file, saveOption)
     
-    return pdf_file
+#     return pdf_file
 # 自定义处理器，用于在日志记录时发送邮件
 def email_handler(message, receiver_email):
     record = message.record
@@ -791,116 +857,116 @@ def email_handler(message, receiver_email):
 
 def create_email_handler(to_addrs):
     return lambda message: email_handler(message, to_addrs)
-def shenzhen_customes_pdf_gennerate(data, filter_data):
-    apcelllic = License()
-    apcelllic.setLicense("JAVA-Aspose.Excel-24.7/license.xml")
-    template_path = "HAWB模板-空+海_测试新版.xls"
-    wb = Workbook(template_path)
-    shenzhn_sheet = wb.getWorksheets().get("S#-SZ-customs")
+# def shenzhen_customes_pdf_gennerate(data, filter_data):
+#     apcelllic = License()
+#     apcelllic.setLicense("JAVA-Aspose.Excel-24.7/license.xml")
+#     template_path = "HAWB模板-空+海_测试新版.xls"
+#     wb = Workbook(template_path)
+#     shenzhn_sheet = wb.getWorksheets().get("S#-SZ-customs")
 
-    def set_cell_value(sheet, row, column, value):
-        if value is None:
-            value = ""
-        cell = sheet.getCells().get(row - 1, column - 1)  # Adjust for zero-based index
+#     def set_cell_value(sheet, row, column, value):
+#         if value is None:
+#             value = ""
+#         cell = sheet.getCells().get(row - 1, column - 1)  # Adjust for zero-based index
 
-        if isinstance(value, str) and value.startswith("="):
-            # 如果 value 是一个公式
-            cell.setFormula(value)
-        else:
-            # 否则，设置为普通值
-            cell.putValue(value)
+#         if isinstance(value, str) and value.startswith("="):
+#             # 如果 value 是一个公式
+#             cell.setFormula(value)
+#         else:
+#             # 否则，设置为普通值
+#             cell.putValue(value)
 
-        # style = cell.getStyle()
-        # style.setTextWrapped(True)
-        # style.setHorizontalAlignment(TextAlignmentType.CENTER)
-        # style.setVerticalAlignment(TextAlignmentType.CENTER)
-        # cell.setStyle(style)
+#         # style = cell.getStyle()
+#         # style.setTextWrapped(True)
+#         # style.setHorizontalAlignment(TextAlignmentType.CENTER)
+#         # style.setVerticalAlignment(TextAlignmentType.CENTER)
+#         # cell.setStyle(style)
 
-    set_cell_value(shenzhn_sheet, 5, 4, data["shipper_name"])
-    set_cell_value(shenzhn_sheet, 5, 17, data["master_bill_no"])
+#     set_cell_value(shenzhn_sheet, 5, 4, data["shipper_name"])
+#     set_cell_value(shenzhn_sheet, 5, 17, data["master_bill_no"])
 
-    set_cell_value(shenzhn_sheet, 9, 4, data["receiver_name"])
-    set_cell_value(shenzhn_sheet, 16, 4, data["receiver_name"])
-    set_cell_value(shenzhn_sheet, 26, 10, data["total_boxes"])
-    set_cell_value(shenzhn_sheet, 26, 15, data["all_english_name"])
-    set_cell_value(shenzhn_sheet, 26, 22, str(data["gross_weight"]))
-    set_cell_value(shenzhn_sheet, 26, 25, str(data["volume"]))
+#     set_cell_value(shenzhn_sheet, 9, 4, data["receiver_name"])
+#     set_cell_value(shenzhn_sheet, 16, 4, data["receiver_name"])
+#     set_cell_value(shenzhn_sheet, 26, 10, data["total_boxes"])
+#     set_cell_value(shenzhn_sheet, 26, 15, data["all_english_name"])
+#     set_cell_value(shenzhn_sheet, 26, 22, str(data["gross_weight"]))
+#     set_cell_value(shenzhn_sheet, 26, 25, str(data["volume"]))
 
-    set_cell_value(shenzhn_sheet, 48, 14, data["gross_weight"])
-    set_cell_value(shenzhn_sheet, 48, 19, str(data["volume"])+"cbm")
-    if filter_data["hblno"]:
-        set_cell_value(shenzhn_sheet, 5, 24, filter_data["hblno"])
-    else:
-        set_cell_value(shenzhn_sheet, 5, 24, "系统未录入")
+#     set_cell_value(shenzhn_sheet, 48, 14, data["gross_weight"])
+#     set_cell_value(shenzhn_sheet, 48, 19, str(data["volume"])+"cbm")
+#     if filter_data["hblno"]:
+#         set_cell_value(shenzhn_sheet, 5, 24, filter_data["hblno"])
+#     else:
+#         set_cell_value(shenzhn_sheet, 5, 24, "系统未录入")
 
-    set_cell_value(shenzhn_sheet, 19, 11, filter_data["startland"])
-    set_cell_value(shenzhn_sheet, 21, 11, filter_data["startland"])
-    set_cell_value(shenzhn_sheet, 23, 4, filter_data["destination"])
-    set_cell_value(shenzhn_sheet, 23, 11, filter_data["destination"])
-    # 航次
-    set_cell_value(shenzhn_sheet, 21, 4, filter_data["flight"])
+#     set_cell_value(shenzhn_sheet, 19, 11, filter_data["startland"])
+#     set_cell_value(shenzhn_sheet, 21, 11, filter_data["startland"])
+#     set_cell_value(shenzhn_sheet, 23, 4, filter_data["destination"])
+#     set_cell_value(shenzhn_sheet, 23, 11, filter_data["destination"])
+#     # 航次
+#     set_cell_value(shenzhn_sheet, 21, 4, filter_data["flight"])
 
-    # 柜号
-    set_cell_value(shenzhn_sheet, 48, 5, filter_data["cabinetNo"])
-    # 封条号
-    set_cell_value(shenzhn_sheet, 48, 6, filter_data["sealno"])
-    # 柜型
-    set_cell_value(shenzhn_sheet, 48, 8, filter_data["cabinettype"])
-    if filter_data["ATD"]:
-        try:
-            atd_datetime = datetime.strptime(filter_data["ATD"], "%Y-%m-%d %H:%M")
+#     # 柜号
+#     set_cell_value(shenzhn_sheet, 48, 5, filter_data["cabinetNo"])
+#     # 封条号
+#     set_cell_value(shenzhn_sheet, 48, 6, filter_data["sealno"])
+#     # 柜型
+#     set_cell_value(shenzhn_sheet, 48, 8, filter_data["cabinettype"])
+#     if filter_data["ATD"]:
+#         try:
+#             atd_datetime = datetime.strptime(filter_data["ATD"], "%Y-%m-%d %H:%M")
             
-        except ValueError:
-            # 如果解析失败，尝试解析不包含秒的格式
-            atd_datetime = datetime.strptime(filter_data["ATD"], "%Y-%m-%d %H:%M:%S")
+#         except ValueError:
+#             # 如果解析失败，尝试解析不包含秒的格式
+#             atd_datetime = datetime.strptime(filter_data["ATD"], "%Y-%m-%d %H:%M:%S")
 
-        # 保留到年月日
-        filter_data["ATD"] = atd_datetime.strftime("%Y-%m-%d")
-        set_cell_value(shenzhn_sheet, 50, 13, filter_data["ATD"])
-    else:
-        set_cell_value(shenzhn_sheet, 50, 13, "系统未录入")
+#         # 保留到年月日
+#         filter_data["ATD"] = atd_datetime.strftime("%Y-%m-%d")
+#         set_cell_value(shenzhn_sheet, 50, 13, filter_data["ATD"])
+#     else:
+#         set_cell_value(shenzhn_sheet, 50, 13, "系统未录入")
 
 
-    ids = []
-    for i in wb.getWorksheets():
-        origin_sheetname = i.getName()
-        if origin_sheetname == "S#-SZ-customs":
-            ids.append(i.getIndex())
-    new_SheetSet = SheetSet(ids)
+#     ids = []
+#     for i in wb.getWorksheets():
+#         origin_sheetname = i.getName()
+#         if origin_sheetname == "S#-SZ-customs":
+#             ids.append(i.getIndex())
+#     new_SheetSet = SheetSet(ids)
 
-    # 配置PDF保存选项
-    saveOption = PdfSaveOptions()
-    saveOption.setSheetSet(new_SheetSet)
-    # 确保每个工作表单独保存为一个PDF页面
-    saveOption.setOnePagePerSheet(True)  # 如果为True，将整个工作表压缩到一个PDF页面上
+#     # 配置PDF保存选项
+#     saveOption = PdfSaveOptions()
+#     saveOption.setSheetSet(new_SheetSet)
+#     # 确保每个工作表单独保存为一个PDF页面
+#     saveOption.setOnePagePerSheet(True)  # 如果为True，将整个工作表压缩到一个PDF页面上
 
-    # 计算公式
-    saveOption.setCalculateFormula(True)  # 计算公式并将其值保存在PDF中
+#     # 计算公式
+#     saveOption.setCalculateFormula(True)  # 计算公式并将其值保存在PDF中
 
-    # 设置字体相关选项
-    saveOption.setCheckWorkbookDefaultFont(
-        True
-    )  # 检查工作簿的默认字体，以避免出现方块字符
-    saveOption.setCheckFontCompatibility(True)  # 检查每个字符的字体兼容性
-    saveOption.setDefaultFont("Arial")  # 设置默认字体（如果未设置正确的字体）
+#     # 设置字体相关选项
+#     saveOption.setCheckWorkbookDefaultFont(
+#         True
+#     )  # 检查工作簿的默认字体，以避免出现方块字符
+#     saveOption.setCheckFontCompatibility(True)  # 检查每个字符的字体兼容性
+#     saveOption.setDefaultFont("Arial")  # 设置默认字体（如果未设置正确的字体）
 
-    # 设置图像处理
-    saveOption.setImageResample(220, 85)  # 设置图像的PPI和JPEG质量，减少PDF文件大小
+#     # 设置图像处理
+#     saveOption.setImageResample(220, 85)  # 设置图像的PPI和JPEG质量，减少PDF文件大小
 
-    # 设置其他相关选项
-    saveOption.setEmbedStandardWindowsFonts(True)  # 嵌入标准的Windows字体
-    saveOption.setClearData(False)  # 在保存后不清除工作簿的数据
-    saveOption.setCompliance(0)  # 设置PDF标准合规级别，如需要合规的PDF/A等格式
-    saveOption.setDisplayDocTitle(True)  # 在PDF窗口的标题栏显示文档标题
+#     # 设置其他相关选项
+#     saveOption.setEmbedStandardWindowsFonts(True)  # 嵌入标准的Windows字体
+#     saveOption.setClearData(False)  # 在保存后不清除工作簿的数据
+#     saveOption.setCompliance(0)  # 设置PDF标准合规级别，如需要合规的PDF/A等格式
+#     saveOption.setDisplayDocTitle(True)  # 在PDF窗口的标题栏显示文档标题
 
-    # 设置PDF文件的完整保存路径
-    totalyugutax = data["other_data"]["totalyugutax"]
+#     # 设置PDF文件的完整保存路径
+#     totalyugutax = data["other_data"]["totalyugutax"]
 
-    pdf_file = f"./pdf/customs/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}-{data['master_bill_no']}-{totalyugutax}.pdf"
+#     pdf_file = f"./pdf/customs/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}-{data['master_bill_no']}-{totalyugutax}.pdf"
 
-    # 保存为PDF
-    wb.save(pdf_file, saveOption)
-    return pdf_file
+#     # 保存为PDF
+#     wb.save(pdf_file, saveOption)
+#     return pdf_file
 
 def get_session():
     try:
@@ -986,17 +1052,18 @@ def output_custom_clear_history_log(
         with get_db() as db:
             # 查询所有收货人，发货人
             consignees = list(db.consignees.find())
-            query = {
-                    "generation_time": {"$gte": datetime.strptime(start_date, "%Y-%m-%d"), "$lte": datetime.strptime(end_date, "%Y-%m-%d")},
-                }
-            # 查询汇总日志
+            query = {}
+            
+            # 如果有id_list,优先使用id查询
             if id_list:
                 query['_id'] = {"$in": [ObjectId(id) for id in id_list]}
-              
             else:
-                # query = {
-                #     "generation_time": {"$gte": datetime.strptime(start_date, "%Y-%m-%d"), "$lte": datetime.strptime(end_date, "%Y-%m-%d")},
-                # }
+                # 如果没有id_list,使用时间范围和其他条件查询
+                query["generation_time"] = {
+                    "$gte": datetime.strptime(start_date, "%Y-%m-%d"), 
+                    "$lte": datetime.strptime(end_date, "%Y-%m-%d")
+                }
+                
                 if filename:
                     query["filename"] = {"$regex": f".*{filename}.*", "$options": "i"}
                 if port:
@@ -1011,12 +1078,9 @@ def output_custom_clear_history_log(
                     query["remarks"] = {"$regex": f".*{remarks}.*", "$options": "i"}
                 if convey_type:
                     query["convey_type"] = convey_type
-                    
 
             summary_logs = list(
-                db.custom_clear_history_summary.find(
-                    query
-                )
+                db.custom_clear_history_summary.find(query)
             )
             # logger.info(f"summary_logs:{summary_logs}")
 
@@ -1345,7 +1409,55 @@ def output_custom_clear_history_log(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-
+def extract_zip_codes_from_excel(excel_path):
+    """
+    从Excel文件中提取邮政编码
+    
+    Args:
+        excel_path: Excel文件路径
+    
+    Returns:
+        dict: 以sheet名为键，邮政编码列表为值的字典
+    """
+    # 检查是否存在缓存文件
+    cache_file = excel_path + '.json'
+    if os.path.exists(cache_file):
+        print(f"从缓存文件加载邮政编码数据: {cache_file}")
+        with open(cache_file, 'r') as f:
+            return json.load(f)
+            
+    print(f"从Excel文件提取邮政编码数据: {excel_path}")
+    
+    # 存储结果的字典
+    zip_codes_by_sheet = {}
+    
+    # 读取Excel文件的所有sheet,将所有列作为字符串读取
+    df = pd.read_excel(excel_path, sheet_name=None, dtype=str)
+    
+    # 遍历每个sheet
+    for sheet_name, sheet_data in df.items():
+        zip_codes = []
+        
+        # 遍历sheet中的所有列
+        for column in sheet_data.columns:
+            # 提取该列中的4位或5位数字
+            codes = sheet_data[column].str.findall(r'\b\d{4,5}\b')
+            # 展平列表并添加到结果中,4位数字前面补0
+            for code_list in codes:
+                if isinstance(code_list, list):
+                    for code in code_list:
+                        if len(code) == 4:
+                            zip_codes.append('0' + code)
+                        else:
+                            zip_codes.append(code)
+            
+        # 去重并存储
+        zip_codes_by_sheet[sheet_name] = list(set(zip_codes))
+    
+    # 将结果保存到缓存文件
+    with open(cache_file, 'w') as f:
+        json.dump(zip_codes_by_sheet, f)
+    return zip_codes_by_sheet
 
 
 
@@ -1432,7 +1544,7 @@ def is_zip_in_range(zip_code, zip_range):
     else:
         return zip_code == zip_range
 
-def fedex_process_excel_with_zip_codes(input_data, pdf_path):
+def fedex_process_excel_with_zip_codes(input_data, pdf_path=None,excel_path=None):
     """
     处理Excel文件或文本数据，判断每个邮政编码属于哪个分组
     
@@ -1444,8 +1556,11 @@ def fedex_process_excel_with_zip_codes(input_data, pdf_path):
         DataFrame或dict: 如果输入是Excel则返回DataFrame,如果是文本则返回dict
     """
     # 从PDF中提取邮政编码分组
-    zip_codes_by_category = extract_zip_codes_from_pdf(pdf_path)
-    
+    if pdf_path:
+        zip_codes_by_category = extract_zip_codes_from_pdf(pdf_path)
+    # 从excel中获取分组
+    if excel_path:
+        zip_codes_by_category = extract_zip_codes_from_excel(excel_path)
     # 判断输入是Excel还是文本
     if isinstance(input_data, (str)) and not str(input_data).endswith(('.xlsx', '.xls')):
         # 处理文本输入
@@ -1761,3 +1876,5 @@ class MinioClient:
         except S3Error as e:
             logger.error(f"下载文件 '{object_name}' 失败: {e}")
             return None
+
+

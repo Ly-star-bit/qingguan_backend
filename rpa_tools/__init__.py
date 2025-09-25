@@ -6,7 +6,6 @@ import httpx
 from playwright.sync_api import BrowserContext
 from .chrome_tools import ChromeLauncher,WindowSetter
 from .email_tools import send_email,read_email_by_subject
-from .excel_tools import get_excel_application,write_data_to_excel
 from .wechat_ocr_tools import find_wechat_ocr_path,find_wechat_path
 
 

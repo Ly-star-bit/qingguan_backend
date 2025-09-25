@@ -11,13 +11,17 @@ import socket
 import time
 import configparser
 import os
-import winreg
+import platform
 from loguru import logger
 
 # from tms_import import login_import
 import socket
 from time import sleep
 from playwright.sync_api import  CDPSession
+
+# Only import winreg on Windows
+if platform.system() == "Windows":
+    import winreg
 
 
 class ChromeLauncher:
@@ -59,41 +63,70 @@ class ChromeLauncher:
         self.process = None
 
     def find_chrome_path(self):
-        common_paths = [
-            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-            "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-            os.path.join(
-                os.getenv("LOCALAPPDATA"),
-                "Google",
-                "Chrome",
-                "Application",
-                "chrome.exe",
-            ),
-        ]
+        system = platform.system()
+        
+        if system == "Windows":
+            common_paths = [
+                "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+                os.path.join(
+                    os.getenv("LOCALAPPDATA"),
+                    "Google",
+                    "Chrome",
+                    "Application",
+                    "chrome.exe",
+                ),
+            ]
+        elif system == "Linux":
+            common_paths = [
+                "/usr/bin/google-chrome",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/chromium",
+                "/usr/bin/google-chrome-stable",
+                "/usr/bin/google-chrome-beta",
+                "/usr/bin/google-chrome-unstable",
+                os.path.join(
+                    os.getenv("HOME"),
+                    ".google-cloud-sdk",
+                    "bin",
+                    "google-cloud-sdk",
+                    "google-cloud-sdk",
+                    "bin",
+                    "chrome"
+                )
+            ]
+        else:
+            # For macOS or other systems
+            common_paths = [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/usr/bin/google-chrome"
+            ]
 
         for path in common_paths:
             if os.path.isfile(path):
                 return path
 
-        try:
-            key = winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
-            )
-            path, _ = winreg.QueryValueEx(key, "")
-            return path
-        except FileNotFoundError:
-            pass
+        # Windows registry lookup (Windows only)
+        if system == "Windows":
+            try:
+                key = winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                )
+                path, _ = winreg.QueryValueEx(key, "")
+                return path
+            except FileNotFoundError:
+                pass
 
-        try:
-            key = winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
-            )
-            path, _ = winreg.QueryValueEx(key, "")
-            return path
-        except FileNotFoundError:
-            pass
+            try:
+                key = winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                )
+                path, _ = winreg.QueryValueEx(key, "")
+                return path
+            except FileNotFoundError:
+                pass
 
         return None
 

@@ -1,0 +1,35 @@
+from .air_product import air_product_router
+from .consignee import consignee_router
+from .custom_clear_history_origin_summary import custom_clear_history_origin_summary_router
+from .custom_clear_history_summary import customer_clear_history_summary_router
+from .dalei import dalei_router
+from .factory import factory_router
+from .fedex_ups import express_delivery_router
+from .fencangdan import fencangdan_router
+from .five_letters_hscode import five_letters_hscode_router
+from .haiyunzishui import haiyunzishui_router
+from .ip_white_list import ip_white_list_router
+from .packing_types import packing_type_router
+from .ports import ports_router
+from .sea_product import sea_product_router
+from .shipper_receiver import shipperandreceiver_router
+from fastapi import APIRouter
+
+qingguan_router = APIRouter(tags=["清关"], prefix='/qingguan')
+
+# 包含所有子路由
+qingguan_router.include_router(air_product_router)
+qingguan_router.include_router(consignee_router)
+qingguan_router.include_router(custom_clear_history_origin_summary_router)
+qingguan_router.include_router(customer_clear_history_summary_router)
+# qingguan_router.include_router(dalei_router)
+qingguan_router.include_router(express_delivery_router)  # fedex_ups 模块的路由
+qingguan_router.include_router(factory_router)
+qingguan_router.include_router(fencangdan_router)
+qingguan_router.include_router(five_letters_hscode_router)
+qingguan_router.include_router(haiyunzishui_router)
+qingguan_router.include_router(ip_white_list_router)
+qingguan_router.include_router(packing_type_router)
+qingguan_router.include_router(ports_router)
+qingguan_router.include_router(sea_product_router)
+qingguan_router.include_router(shipperandreceiver_router)

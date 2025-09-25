@@ -20,7 +20,7 @@ class AddressProcessor:
         self.email_sender = None
         self.MONGO_CONFIG = {
             'host': os.getenv("MONGO_HOST"),
-            'port': int(os.getenv("MONGO_PORT")),
+            'port': int(os.getenv("MONGO_PORT")),  # pyright: ignore[reportArgumentType]
             'username': os.getenv("MONGO_USER"),
             'password': os.getenv("MONGO_PASS"),
             'database': os.getenv("MONGO_DB")

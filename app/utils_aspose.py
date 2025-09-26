@@ -259,7 +259,7 @@ class AsposeCellsNETHandler:
 
                         # all_pic_path.append({"pic_path":pic_path,"new_name":item['DESCRIPTION']})
                     huomian_explaination_sheet.AutoFitRow(huomian_row - 1)
-                    huomian_explaination_sheet.Cells.InsertRows(huomian_row)
+                    huomian_explaination_sheet.Cells.InsertRow(huomian_row)
             
             # 创建输出目录
             Path(output_dir).mkdir(parents=True, exist_ok=True)

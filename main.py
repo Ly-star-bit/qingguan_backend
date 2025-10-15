@@ -5,6 +5,7 @@ import jpype
 from loguru import logger
 from sqlmodel import SQLModel, select
 from app.apis.web_vba import web_vba_router,IPWhitelistMiddleware
+from app.api_keys.apis.api_keys import api_key_router
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi.staticfiles import StaticFiles
@@ -65,6 +66,7 @@ async def lifespan(app: FastAPI):
 # 定义FastAPI应用
 app = FastAPI(lifespan=lifespan)
 app.include_router(web_vba_router)
+app.include_router(api_key_router, prefix="/api")  # API密钥相关路由
 
 # 添加静态文件服务
 app.mount("/static", StaticFiles(directory="static"), name="static")

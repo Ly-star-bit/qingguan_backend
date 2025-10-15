@@ -16,7 +16,7 @@ from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 import os
-
+from app.api_keys.apis.api_keys import validate_api_key
 from app.db_mongo import get_session, enforcer
 
 load_dotenv()
@@ -55,14 +55,18 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
         if request.method == "GET" and request.url.path == "/menu":
             return await call_next(request)
             
-        if '/static/' in request.url.path or "/tiles" in request.url.path:
+        if '/static/' in request.url.path or "/tiles" in request.url.path or "/hubs_client" in request.url.path:
             return await call_next(request)
         if request.url.path in excluded_paths:
             return await call_next(request)
         # logger.info(f"request.headers:{request.headers}") 
         # 从请求头获取 token
-        
+        api_key_header_value = request.headers.get("X-API-Key")
+        if api_key_header_value:
+            await validate_api_key(request)
+            return await call_next(request)
         auth_header = request.headers.get("Authorization")
+        
         if not auth_header or not auth_header.startswith("Bearer "):
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,

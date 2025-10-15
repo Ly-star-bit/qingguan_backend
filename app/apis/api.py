@@ -15,6 +15,7 @@ class ApiEndpoint(BaseModel):
     Path: str
     Type: Optional[str] = None
     Description: str
+    PermissionCode: Optional[str] = None    # 🔑 关键！关联 PermissionItem.code，如 "product:read"
 
 api_router = APIRouter(tags=["api_endpoints"])
 
@@ -77,6 +78,7 @@ async def update_api_endpoint(endpoint_id: str, endpoint: ApiEndpoint, session =
     old_path = old_endpoint_data.get("Path")
     old_api_group = old_endpoint_data.get("ApiGroup")
     old_type = old_endpoint_data.get("Type")
+    old_permission_code = old_endpoint_data.get("PermissionCode")
 
     endpoint_dict = endpoint.dict(exclude_unset=True)
     if "id" in endpoint_dict:
@@ -186,12 +188,24 @@ async def sync_from_openapi(request: Request, session=Depends(get_session)):
             })
 
             if not existing:
+                # 根据 HTTP 方法自动设置 PermissionCode
+                action_map = {
+                    "GET": "read",
+                    "POST": "create", 
+                    "PUT": "update",
+                    "PATCH": "update",
+                    "DELETE": "delete"
+                }
+                action = action_map.get(method.upper(), "access")
+                permission_code = f"{api_group.lower()}:{action}"
+                
                 db.api_endpoints.insert_one({
                     "ApiGroup": api_group,
                     "Method": method.upper(),
                     "Type": "ACL",
                     "Path": path,
                     "Description": summary,
+                    "PermissionCode": permission_code,
                 })
                 created_count += 1
 
@@ -202,7 +216,12 @@ async def get_user_api_permissions(user_id: str, session = Depends(get_session))
     """获取用户API权限"""
     db = session
     user = db.users.find_one({"_id": ObjectId(user_id)})
-    return user.get("api_ids", [])
+    
+    # 获取用户在Casbin中的权限
+    user_policies = enforcer.get_filtered_policy(0, user_id)
+    permissions = [f"{policy[1]}:{policy[2]}" for policy in user_policies]  # resource:action format
+    
+    return permissions
 
 
 
@@ -224,13 +243,28 @@ async def update_user_api_permissions(update_user_api_permissions: UpdateUserApi
     
     # 需要更新的api_ids集合
     update_api_ids = set(api_ids)
-    enforcer.update_filtered_policies    # 需要删除的api_ids
+    
+    # 需要删除的api_ids
     for policy in current_policies:
         if policy[1] not in update_api_ids:
-            enforcer.remove_policy(user_id, policy[1])
+            enforcer.remove_policy([user_id, policy[1], "access"])
     
     # 添加新策略
     for api_id in update_api_ids - current_api_ids:
-        enforcer.add_policy(user_id, api_id, "access")
+        # 从数据库中获取API端点信息以获取权限码
+        api_endpoint = db.api_endpoints.find_one({"_id": ObjectId(api_id)})
+        if api_endpoint and api_endpoint.get("PermissionCode"):
+            # 使用API端点的PermissionCode作为权限
+            permission_code = api_endpoint["PermissionCode"]
+            # 分割权限码以获取资源和操作
+            parts = permission_code.split(':')
+            if len(parts) == 2:
+                resource, action = parts
+                enforcer.add_policy(user_id, resource, action, "allow")
+        else:
+            # 如果没有权限码，使用api_id作为资源
+            enforcer.add_policy(user_id, api_id, "access", "allow")
+    
+    enforcer.load_policy()
     
     return {"message": "更新成功"}

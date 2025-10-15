@@ -1,3 +1,4 @@
+import json
 import os
 import casbin
 from dotenv import load_dotenv
@@ -7,6 +8,77 @@ from casbin_pymongo_adapter import Adapter
 
 # 加载环境变量
 load_dotenv()
+def norm_key(k): return k.strip()
+def norm_val(k, v):
+    if v is None: return None
+    if k in ("start", "dest", "startLand", "destination"): return str(v).upper()
+    if k in ("type",): return str(v).lower()
+    return v
+
+def _as_list(x):
+    if x is None: return []
+    if isinstance(x, (list, tuple, set)): return list(x)
+    return [x]
+
+def satisfies(attrs_json: str, env: dict) -> bool:
+    """
+    attrs_json: 策略里的 JSON 字符串
+    env:        运行时传入的属性 dict（e.g. {"start":"CN","dest":"US","type":"sea"}）
+    支持：
+      - 直接取值/列表： {"start":["CN","VN"],"dest":"US"}
+      - 通配 * ： {"start":"*"}
+      - 比较操作：{"type":{"eq":"sea"}}, {"start":{"neq":"RU"}},
+                  {"country":{"in":["US","JP"]}}, {"dest":{"nin":["RU","IR"]}}
+    约束之间 AND 关系；未出现的键视为“不满足”除非策略为 "*"
+    """
+    try:
+        attrs = json.loads(attrs_json) if attrs_json else {}
+    except Exception:
+        return False
+
+    # 空对象：不限制
+    if not attrs:
+        return True
+
+    # 规范化 env
+    env_norm = {norm_key(k): norm_val(k, v) for k, v in (env or {}).items()}
+
+    for raw_k, rule in attrs.items():
+        k = norm_key(raw_k)
+
+        # 通配
+        if rule == "*" or rule is None:
+            continue
+
+        ev = env_norm.get(k)
+        # 列表或标量直接匹配（等价于 "in"）
+        if isinstance(rule, (list, tuple, set)) or not isinstance(rule, dict):
+            allowed = set(norm_val(k, v) for v in _as_list(rule))
+            if ev is None:
+                return False
+            if allowed and ev not in allowed:
+                return False
+            continue
+
+        # 高级操作
+        # 支持 eq/neq/in/nin （可按需扩展 regex, gte, lte 等）
+        if "eq" in rule:
+            target = norm_val(k, rule["eq"])
+            if ev != target:
+                return False
+        if "neq" in rule:
+            target = norm_val(k, rule["neq"])
+            if ev == target:
+                return False
+        if "in" in rule:
+            allowed = set(norm_val(k, v) for v in _as_list(rule["in"]))
+            if ev not in allowed:
+                return False
+        if "nin" in rule:
+            denied = set(norm_val(k, v) for v in _as_list(rule["nin"]))
+            if ev in denied:
+                return False
+    return True
 
 # MongoDB 配置
 MONGO_CONFIG = {
@@ -25,12 +97,15 @@ client = MongoClient(
 
 # 获取数据库
 db = client[MONGO_CONFIG['database']]
-
+from casbin.util import key_match4
 # 创建 Casbin 适配器
 adapter = Adapter(uri,MONGO_CONFIG['database'])
 enforcer = casbin.Enforcer('model.conf', adapter)
 # 显式开启自动保存，避免手动 save_policy 造成重复写入
 enforcer.enable_auto_save(True)
+enforcer.add_function("satisfies", satisfies)
+# enforcer.add_function("keyMatch4", key_match4)
+
 enforcer.load_policy()
 
 # 为 casbin_rule 集合添加唯一索引，防止完全相同策略重复插入

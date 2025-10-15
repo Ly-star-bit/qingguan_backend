@@ -66,6 +66,7 @@ from app.utils import (
 from morelink_api import MoreLinkClient
 from rpa_tools import find_playwright_node_path
 from rpa_tools.email_tools import send_email
+from .permission_item import permission_item_router
 
 adapter = Adapter(engine)
 enforcer = casbin.Enforcer('model.conf', adapter)
@@ -279,6 +280,8 @@ def process_shipping_data(
         return results,summary_log_data
 
 web_vba_router = APIRouter()
+web_vba_router.include_router(permission_item_router)
+
 # 定义FastAPI接口
 @web_vba_router.post("/process-shipping-data")
 async def process_shipping_data_endpoint(request: ShippingRequest, session: Session = Depends(get_session)):

@@ -20,6 +20,7 @@ from app.apis.excel_preview import mount_static_files
 from app.apis.excel_preview import router as excel_preview_router
 from app.apis.menu import menu_router
 from app.apis.user import user_router
+from app.apis.role import role_router
 from app.cargo_tracking_data.apis.cargo_tracking import cargo_tracking_router
 from app.dadan.apis.order import order_router
 from app.dadan.models import ShipmentLog
@@ -32,9 +33,12 @@ from app.middleware import (
 from app.price_card.apis.price_card import price_card_router
 from app.qingguan.apis.web_vba_mongo import IPWhitelistMiddleware, web_vba_router
 from app.qingguan.apis.qingguan_all_router import qingguan_router
+from app.fentan.apis.all_fentan import fentan_router
 from app.route_17track.apis.route_17track import router_17track
 from app.skudetail.apis.skudetail import skudetail_router
-
+from app.api_keys.apis.api_keys import api_key_router
+from app.apis.permission_item import permission_item_router
+from app.hubs_new_morelink.apis.hubs_client_router import hubs_router
 from app.utils import create_email_handler, output_custom_clear_history_log
 from email_ip_auto import main as email_ip_auto_main
 from morelink_api import MoreLinkClient
@@ -42,7 +46,7 @@ from morelink_output_excel_client import main as morelink_output_excel_main
 from morelink_output_excel_client import morelink_get_operNo
 from rpa_tools import find_playwright_node_path
 from rpa_tools.email_tools import send_email
-
+from fastapi.openapi.utils import get_openapi
 # "yu.luo@hubs-scs.com,op_sea@hubs-scs.com"
 receiver_emial = "op_sea@hubs-scs.com"
 logger.level("ALERT", no=35, color="<red>")
@@ -103,6 +107,8 @@ async def lifespan(app: FastAPI):
 # 定义FastAPI应用
 app = FastAPI(lifespan=lifespan)
 app.include_router(user_router)
+app.include_router(role_router)
+
 # app.include_router(web_vba_router)
 app.include_router(qingguan_router)
 app.include_router(menu_router)
@@ -115,9 +121,50 @@ app.include_router(price_card_router)
 app.include_router(router_17track)
 app.include_router(skudetail_router)
 app.include_router(casbin_policy_router)
+app.include_router(api_key_router)
+app.include_router(fentan_router)
+app.include_router(permission_item_router)
+app.include_router(hubs_router)
 # 挂载静态文件
 mount_static_files(app)
 
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title="My API",
+        version="1.0.0",
+        routes=app.routes,
+    )
+
+    # 定义两个安全方案
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Enter token as: Bearer <your-token>"
+        },
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": "Enter your API key"
+        }
+    }
+
+    # 关键：使用数组表示“或”关系
+    # 每个对象代表一种认证方式，满足任意一个即可
+    openapi_schema["security"] = [
+        {"BearerAuth": []},
+        {"ApiKeyAuth": []}
+    ]
+
+    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+app.openapi = custom_openapi
 # 设置CORS
 origins = [
     "http://localhost",

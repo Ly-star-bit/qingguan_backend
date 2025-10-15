@@ -27,13 +27,14 @@ def read_products_sea(
     limit: int = 10,
     名称: Optional[str] = None,
     get_all: bool = False,
-    country: str = "China",
+    startland:str = "China",
+    destination: str = "America",
     zishui: bool = None,
     is_hidden: bool = None,
     session: MongoClient = Depends(get_session),
 ):
     db = session
-    query = {"country": country}
+    query = {"destination": destination,"startland":startland}
     if is_hidden is not None:
         if is_hidden:
             query["is_hidden"] = True

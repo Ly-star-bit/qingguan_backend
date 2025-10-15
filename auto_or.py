@@ -291,16 +291,19 @@ def optimize_packing_selection(
             print(
                 f"税金/重量 = {tax_per_weight_cny:.2f} CNY/kg (要求 ≤ {beta_cny}) {'✅' if tax_ratio_ok else '❌'}"
             )
-
+        allGoodsPrice = total_value_usd_check
+        mpf_result = allGoodsPrice * 0.003464
+        mpf_min_total = 33.58 if mpf_result < 33.58 else (634.62 if mpf_result > 634.62 else mpf_result)
         result["summary"] = {
             "total_weight": total_weight_check,
             "total_value_usd": total_value_usd_check,
-            "total_tax_cny": total_tax_cny_check,
+            "total_tax_cny": total_tax_cny_check ,
             "selected_count": selected_count,
             "value_per_weight_usd": value_per_weight_usd,
             "tax_per_weight_cny": tax_per_weight_cny,
             "value_ratio_ok": value_ratio_ok,
             "tax_ratio_ok": tax_ratio_ok,
+            'MPF':mpf_min_total
         }
 
     else:

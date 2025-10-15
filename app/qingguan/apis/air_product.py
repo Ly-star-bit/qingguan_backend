@@ -31,13 +31,14 @@ def read_products(
     limit: int = 10,
     名称: Optional[str] = None,
     get_all: bool = False,
-    country: str = "China",
+    startland:str = "China",
+    destination: str = "America",
     zishui: bool = None,
     is_hidden:bool=None,
     session: MongoClient = Depends(get_session),
 ):
     db = session
-    query = {"country": country}
+    query = {"destination": destination,"startland":startland}
     if is_hidden is not None:
         if is_hidden:
             query["is_hidden"] = True
@@ -231,14 +232,15 @@ def delete_product(product_id: str, session: MongoClient = Depends(get_session))
 def output_products(
     session: MongoClient = Depends(get_session),
     transport_type: str = "",
-    country: str = "China",
+    startland:str = "China",
+    destination: str = "America",
 ):
     try:
         db = session
         if transport_type == "sea":
-            products = list(db.products_sea.find({"country": country}))
+            products = list(db.products_sea.find({"destination": destination,"startland":startland}))
         else:
-            products = list(db.products.find({"country": country}))
+            products = list(db.products.find({"destination": destination,"startland":startland}))
 
         output_products = []
         all_jia_zheng_keys = set()

@@ -3,12 +3,14 @@ name = "web-vba"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11.8,<3.12"   # 👈 关键：排除 3.12+
 dependencies = [
     "apscheduler>=3.11.0",
     "aspose-cells==24.7",
     "bcrypt>=4.2.1",
+    "captcha-recognizer>=1.0.1",
     "casbin-sqlalchemy-adapter>=1.4.0",
+    "fastapi-authz>=1.0.0",
     "fastapi>=0.115.6",
     "feapder>=1.9.1",
     "httpx>=0.28.1",
@@ -29,4 +31,15 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "tenacity>=9.0.0",
     "uvicorn>=0.34.0",
+    "pymongo>=4.15.3",
+    "casbin-pymongo-adapter>=1.6.0",
+    "python-multipart>=0.0.20",
+    "passlib[bcrypt]>=1.7.4",
+    "pytoml>=0.1.21",
+    "pillow>=11.3.0",
+    "minio>=7.2.18",
+    "pypdf2>=3.0.1",
+    "pythonnet>=3.0.5",
+    "pulp>=3.3.0",
+    "sse-starlette>=3.0.2",
 ]

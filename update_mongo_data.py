@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from pymongo import MongoClient
+from pymongo import MongoClient, UpdateOne
 from dotenv import load_dotenv
 from bson import ObjectId
 
@@ -19,8 +19,47 @@ mongo_client = MongoClient(uri)
 mongo_db = mongo_client[MONGO_CONFIG['database']]
 
 # # 读取Excel文件并更新products集合中的装箱和单价数据
-products_collection = mongo_db['products_sea']
+products_collection = mongo_db['products']
+# 将所有包含 'country' 字段的文档中的 'country' 重命名为 'destination'
+# 构建批量操作
+bulk_operations = []
 
+# 1. 处理 country 为 "China" 或 "Vietnam" 的文档
+for doc in products_collection.find({"country": {"$in": ["China", "Vietnam"]}}):
+    bulk_operations.append(
+        UpdateOne(
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "startland": doc["country"],      # 保留原值作为 startland
+                    "destination": "America"
+                },
+                "$unset": {"country": ""}             # 删除原 country 字段
+            }
+        )
+    )
+
+# 2. 处理 country 为 "Canada" 的文档
+for doc in products_collection.find({"country": "Canada"}):
+    bulk_operations.append(
+        UpdateOne(
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "startland": "China",
+                    "destination": "Canada"
+                },
+                "$unset": {"country": ""}
+            }
+        )
+    )
+
+# 执行批量更新
+if bulk_operations:
+    result = products_collection.bulk_write(bulk_operations)
+    print(f"成功更新 {result.modified_count} 个文档")
+else:
+    print("没有符合条件的文档需要更新")
 # 读取Excel文件
 df = pd.read_excel(r'C:\Users\a1337\Desktop\301-更新-IT-海运.xlsx')  # 请替换为实际的Excel文件名
 df.fillna(0,inplace=True)

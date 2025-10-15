@@ -63,42 +63,102 @@ async def remove_policy(policy: Policy):
     return {"message": "策略删除成功"}
 
 @policy_router.put("/policies")
-async def update_policy(update_policy: UpdatePolicy):
-    """更新策略"""
-    old_policy = [
-        update_policy.old_sub,
-        update_policy.old_obj,
-        update_policy.old_act,
-        update_policy.old_eft,
-        "",
-        update_policy.old_description,
-    ]
-    new_policy = [
-        update_policy.new_sub,
-        update_policy.new_obj,
-        update_policy.new_act,
-        update_policy.new_eft,
-        "",
-        update_policy.new_description,
-    ]
+async def update_policies(update_policies: List[UpdatePolicy]):
+    """
+    批量更新策略
+    - 支持跨 ptype 更新（删除旧 + 添加新）
+    - 支持同 ptype 更新（直接替换）
+    - 任一策略失败则整体回滚（尽力而为）
+    """
+    print(update_policies)
+    if not update_policies:
+        raise HTTPException(status_code=400, detail="更新策略列表不能为空")
 
-    # 如果 ptype 不同：删除旧策略，添加新策略
-    if update_policy.old_ptype != update_policy.new_ptype:
-        removed = enforcer.remove_named_policy(update_policy.old_ptype, old_policy)
-        if not removed:
-            raise HTTPException(status_code=404, detail="旧策略不存在，无法更新")
-        added = enforcer.add_named_policy(update_policy.new_ptype, new_policy)
-        if not added:
-            raise HTTPException(status_code=400, detail="新策略已存在或无法添加")
-        enforcer.load_policy()
-        return {"message": "策略更新成功"}
+    # 记录已成功操作的策略，用于回滚
+    rollback_log = []
 
-    # ptype 相同：直接使用 casbin 的 update 接口
-    updated = enforcer.update_named_policy(update_policy.old_ptype, old_policy, new_policy)
-    if not updated:
-        raise HTTPException(status_code=404, detail="策略不存在或无法更新")
-    enforcer.load_policy()
-    return {"message": "策略更新成功"}
+    try:
+        for i, update_policy in enumerate(update_policies):
+            old_policy = [
+                update_policy.old_sub,
+                update_policy.old_obj,
+                update_policy.old_act,
+                update_policy.old_eft,
+                "",  # v4（通常为空）
+                update_policy.old_description,
+            ]
+            new_policy = [
+                update_policy.new_sub,
+                update_policy.new_obj,
+                update_policy.new_act,
+                update_policy.new_eft,
+                "",  # v4
+                update_policy.new_description,
+            ]
+
+            if update_policy.old_ptype != update_policy.new_ptype:
+                # 跨 ptype：先删后加
+                removed = enforcer.remove_named_policy(update_policy.old_ptype, old_policy)
+                if not removed:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"第 {i+1} 项：旧策略不存在，无法更新"
+                    )
+                rollback_log.append(("add", update_policy.old_ptype, old_policy))  # 回滚时重新添加旧策略
+
+                added = enforcer.add_named_policy(update_policy.new_ptype, new_policy)
+                if not added:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"第 {i+1} 项：新策略已存在或无法添加"
+                    )
+                rollback_log.append(("remove", update_policy.new_ptype, new_policy))  # 回滚时删除新策略
+
+            else:
+                # 同 ptype：直接更新
+                updated = enforcer.update_named_policy(
+                    update_policy.old_ptype, old_policy, new_policy
+                )
+                if not updated:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"第 {i+1} 项：策略不存在或无法更新"
+                    )
+                # 回滚：用新策略换回旧策略
+                rollback_log.append((
+                    "update", 
+                    update_policy.old_ptype, 
+                    new_policy, 
+                    old_policy
+                ))
+
+        # 所有策略更新成功，持久化到存储（如数据库/文件）
+        # enforcer.save_policy()  # 注意：不是 load_policy！
+        return {"message": f"成功更新 {len(update_policies)} 条策略"}
+
+    except HTTPException:
+        # 发生业务错误，尝试回滚
+        _rollback_policies(enforcer, rollback_log)
+        raise  # 重新抛出原始异常
+    except Exception as e:
+        # 发生未知错误，尝试回滚
+        _rollback_policies(enforcer, rollback_log)
+        raise HTTPException(status_code=500, detail=f"批量更新失败: {str(e)}")
+
+
+def _rollback_policies(enforcer, rollback_log: List[tuple]):
+    """尽力回滚已执行的操作（不保证100%成功）"""
+    for op in reversed(rollback_log):
+        try:
+            if op[0] == "add":
+                enforcer.add_named_policy(op[1], op[2])
+            elif op[0] == "remove":
+                enforcer.remove_named_policy(op[1], op[2])
+            elif op[0] == "update":
+                enforcer.update_named_policy(op[1], op[2], op[3])  # new -> old
+        except Exception:
+            # 回滚失败也继续，避免掩盖原始错误
+            pass
 
 @policy_router.get("/policies/check")
 async def check_permission(subject: str, object: str, action: str):

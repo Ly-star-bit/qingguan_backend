@@ -1,7 +1,9 @@
 import os
-import winreg
-import re
 
+import platform
+import re
+if platform.system() == "Windows":
+    import winreg
 def find_wechat_versioned_path(base_path):
     # 正则表达式匹配类似版本号的文件夹
     pattern = re.compile(r'\[\d+\.\d+\.\d+\.\d+\]')

@@ -1,7 +1,9 @@
+from io import BytesIO
 from typing import Dict, List, Optional
 
 from fastapi import (
     APIRouter,
+    HTTPException,
 )
 from pydantic import BaseModel
 
@@ -39,7 +41,7 @@ from fastapi import (
     Depends,
     Request
 )
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from loguru import logger
 
 from app.dadan.models import (
@@ -60,6 +62,8 @@ from app.utils_aspose import (
     generate_admin_shenhe_template
 )
 from app.db_mongo import get_session
+from urllib.parse import quote
+
 qingguan_router = APIRouter(tags=["清关"], prefix='/qingguan')
 
 # 包含所有子路由
@@ -151,14 +155,14 @@ def process_shipping_data(
         box_num = product.box_num
         if execute_type == "Air":
             if export_country == "Vietnam":
-                product_record = db.products.find_one({"中文品名": product_name,"country":"Vietnam"})
+                product_record = db.products.find_one({"中文品名": product_name,"startland":"Vietnam"})
             else:
-                product_record = db.products.find_one({"中文品名": product_name,"country":"China"})
+                product_record = db.products.find_one({"中文品名": product_name,"startland":"China"})
         else:
             if export_country == "Vietnam":
-                product_record = db.products_sea.find_one({"中文品名": product_name,"country":"Vietnam"})
+                product_record = db.products_sea.find_one({"中文品名": product_name,"startland":"Vietnam"})
             else:
-                product_record = db.products_sea.find_one({"中文品名": product_name,"country":"China"})
+                product_record = db.products_sea.find_one({"中文品名": product_name,"startland":"China"})
         if not product_record:
             raise ValueError(f"Product '{product_name}' not found in database")
 
@@ -408,11 +412,11 @@ def process_shipping_data_canada(
         box_num = product.box_num
         if execute_type == "Air":
             product_record = db.products.find_one(
-                {"中文品名": product_name, "country": "Canada"}
+                {"中文品名": product_name, "destination": "Canada"}
             )
         else:
             product_record = db.products_sea.find_one(
-                {"中文品名": product_name, "country": "Canada"}
+                {"中文品名": product_name, "destination": "Canada"}
             )
         if not product_record:
             raise ValueError(f"Product '{product_name}' not found in database")
@@ -737,3 +741,65 @@ async def process_shipping_data_endpoint(
         return JSONResponse(
             {"status": "False", "content": f"Internal Server Error: {str(e)}"}
         )
+
+
+@qingguan_router.get("/download/{file_name}", summary="下载文件（MinIO）")
+async def download_file(file_name: str):
+    local_path = f"./file/{file_name}"
+    if os.path.exists(local_path):
+        # 如果本地存在文件，则直接下载本地文件
+        encoded_filename = quote(file_name)
+        return FileResponse(
+            path=local_path,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename={encoded_filename}"}
+        )
+    
+    minio_client = MinioClient(
+        os.getenv("MINIO_ENDPOINT"),
+        os.getenv("MINIO_ACCESS_KEY"),
+        os.getenv("MINIO_SECRET_KEY"),
+        os.getenv("MINIO_BUCKET_NAME"),
+        secure=False,
+    )
+
+    # 连接到 MinIO
+    minio_client.connect()
+    # 根据文件扩展名判断文件类型
+    file_extension = file_name.split(".")[-1].lower()
+
+    if file_extension == "pdf":
+        file_bytes = minio_client.download_file(f"qingguan_pdf/{file_name}")
+        media_type = "application/pdf"
+    elif file_extension in ["xlsx", "xls"]:
+        file_bytes = minio_client.download_file(f"qingguan_shenhe_excel/{file_name}")
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
+    encoded_filename = quote(file_name)
+
+    # 创建响应对象，返回文件数据
+    bytes_io = BytesIO(file_bytes)
+    return StreamingResponse(
+        bytes_io,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={encoded_filename}"},
+    )
+
+@qingguan_router.get("/api/exchange-rate", summary="获取汇率")
+def get_exchange_rate(rate_type: str="USDCNY",session: MongoClient = Depends(get_session)):
+    url = "https://finance.pae.baidu.com/selfselect/sug?wd=%E7%BE%8E%E5%85%83%E4%BA%BA%E6%B0%91%E5%B8%81&skip_login=1&finClientType=pc"
+    db = session
+    if rate_type == "USDCNY":
+        exchange_rate = db.exchange_rates.find_one({"version": "latest","type":"美金人民币汇率"})
+    elif rate_type == "CADCNY":
+        exchange_rate = db.exchange_rates.find_one({"version": "latest","type":"加币人民币汇率"})
+    else:
+        raise HTTPException(status_code=400, detail="汇率类型不支持")
+    print(exchange_rate)
+    if exchange_rate:
+        rate = exchange_rate["rate"]
+        return {"USDCNY": rate}
+    # 12月上汇率
+    rate = "7.3000"
+    return {"USDCNY": rate}

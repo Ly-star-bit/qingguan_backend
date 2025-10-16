@@ -40,24 +40,48 @@ class BasicAuth(AuthenticationBackend):
 
         username, _, password = decoded.partition(":")
         return AuthCredentials(["authenticated"]), SimpleUser(username)
-    
+class ForwardedPrefixMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        prefix = request.headers.get("x-forwarded-prefix", "")
+        request.scope["root_path"] = prefix.rstrip("/")
+        return await call_next(request)
 
+#
 # JWT 配置
 ACCESS_TOKEN_SECRET_KEY = os.getenv("ACCESS_TOKEN_SECRET_KEY")
 ACCESS_TOKEN_ALGORITHM = os.getenv("ACCESS_TOKEN_ALGORITHM")
+EXCLUDED_PATHS = {
+    "/login",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/qingguan/ip_white_list/",
+    "/excel-preview",
+    "/luckysheet-preview",
+    "/upload-excel-luckysheet",
+    "/process_excel_usp_data",
+    "/refresh",
+    "/17track/notify",
+}
+
+# 前缀排除（用于 /static/xxx, /tiles/xxx 等）
+EXCLUDED_PREFIXES = ("/static/", "/tiles", )
 class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # 定义不需要验证的路径
-        logger.info(f"request.url.path:{request.url.path}")
-        excluded_paths = ["/login", "/docs", "/openapi.json", "/redoc","/qingguan/ip_white_list/","/excel-preview","/luckysheet-preview","/upload-excel-luckysheet","/process_excel_usp_data","/refresh","/17track/notify"]
-        
-        # 添加GET /menu 不需要鉴权
-        if request.method == "GET" and request.url.path == "/menu":
+        path = request.url.path
+        method = request.method
+
+        logger.info(f"request.url.path: {path}")        # 1. 完全匹配的路径（无需鉴权）
+        if path in EXCLUDED_PATHS:
             return await call_next(request)
-            
-        if '/static/' in request.url.path or "/tiles" in request.url.path or "/hubs_client" in request.url.path:
+
+        # 2. 特殊规则：GET /menu 免鉴权
+        if method == "GET" and path == "/menu":
             return await call_next(request)
-        if request.url.path in excluded_paths:
+
+        # 3. 前缀匹配的路径（如 /static/...）
+        if any(path.startswith(prefix) for prefix in EXCLUDED_PREFIXES):
             return await call_next(request)
         # logger.info(f"request.headers:{request.headers}") 
         # 从请求头获取 token
@@ -101,6 +125,9 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
             subject = payload.get("sub")
             path = request.url.path
             action = request.method
+            env = {}
+            # if  'destination' in  env:
+
 
             if subject != "admin":
                 db = next(get_session())

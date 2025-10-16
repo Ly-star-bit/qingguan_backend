@@ -12,14 +12,14 @@ from pydantic import BaseModel,Field
 
 from app.db_mongo import get_session
 class ConsigneeData(BaseModel):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: Optional[str] = Field(default=None)
     中文: str = Field(max_length=255, nullable=False)
     发货人: str = Field(max_length=255, nullable=False)
     发货人详细地址: str = Field(nullable=False)
     类型: str  = Field(nullable=False)
     关税类型: str = Field(nullable=False)
     备注: str = Field(nullable=False)
-    hide: str = Field(nullable=False)
+    hide: str = Field(nullable=False,default='0')
 consignee_router = APIRouter(tags=["收发货人"],prefix="/consignee")
 # 收发货人CRUD操作
 @consignee_router.post("/", response_model=ConsigneeData, summary="创建收货人")

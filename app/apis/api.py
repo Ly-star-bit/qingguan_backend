@@ -197,7 +197,7 @@ async def sync_from_openapi(request: Request, session=Depends(get_session)):
                     "DELETE": "delete"
                 }
                 action = action_map.get(method.upper(), "access")
-                permission_code = f"{api_group.lower()}:{action}"
+                permission_code = f"{api_group.lower()}_{summary}:{action}"
                 
                 db.api_endpoints.insert_one({
                     "ApiGroup": api_group,

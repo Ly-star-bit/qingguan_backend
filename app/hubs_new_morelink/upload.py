@@ -1,6 +1,5 @@
 from datetime import datetime
 import json
-from nt import truncate
 import traceback
 import httpx
 from loguru import logger

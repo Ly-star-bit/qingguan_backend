@@ -97,7 +97,6 @@ client = MongoClient(
 
 # 获取数据库
 db = client[MONGO_CONFIG['database']]
-from casbin.util import key_match4
 # 创建 Casbin 适配器
 adapter = Adapter(uri,MONGO_CONFIG['database'])
 enforcer = casbin.Enforcer('model.conf', adapter)
@@ -105,7 +104,6 @@ enforcer = casbin.Enforcer('model.conf', adapter)
 enforcer.enable_auto_save(True)
 enforcer.add_function("satisfies", satisfies)
 # enforcer.add_function("keyMatch4", key_match4)
-
 enforcer.load_policy()
 
 # 为 casbin_rule 集合添加唯一索引，防止完全相同策略重复插入

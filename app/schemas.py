@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 from uuid import UUID
 from fastapi import File, UploadFile
 from pydantic import BaseModel
@@ -7,47 +7,44 @@ from pydantic import BaseModel
 from app.dadan.models import CustomClearHistorySummaryLog
 
 
+
+
+
 class Policy(BaseModel):
     ptype: str = "p"
     sub: str
     obj: str
     act: str
+    attrs: Optional[Dict] = None   # ★ 新增：策略属性 JSON
     eft: str = "allow"
-    description: str = ""
+    description: Optional[str] = ""
 
 class UpdatePolicy(BaseModel):
     old_ptype: str = "p"
     old_sub: str
     old_obj: str
     old_act: str
+    old_attrs: Optional[Dict] = None
     old_eft: str = "allow"
-    old_description: str = ""
+    old_description: Optional[str] = ""
+
     new_ptype: str = "p"
     new_sub: str
     new_obj: str
     new_act: str
+    new_attrs: Optional[Dict] = None
     new_eft: str = "allow"
-    new_description: str = ""
+    new_description: Optional[str] = ""
 
 class Group(BaseModel):
     user: str
     group: str
-    description:str
-
-class GroupUpdate(BaseModel):
-    old_user: str
-    old_group: str
-    old_description: str
-    new_user: str
-    new_group: str
-    new_description: str
-
+    description: Optional[str] = ""
 
 class GroupWithPolicies(BaseModel):
-    user: str
     group: str
-    description: str
     policies: List[Policy]
+
 
 
 class UserCreate(BaseModel):

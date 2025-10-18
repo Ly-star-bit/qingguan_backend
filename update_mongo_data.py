@@ -19,47 +19,64 @@ mongo_client = MongoClient(uri)
 mongo_db = mongo_client[MONGO_CONFIG['database']]
 
 # # 读取Excel文件并更新products集合中的装箱和单价数据
-products_collection = mongo_db['products']
-# 将所有包含 'country' 字段的文档中的 'country' 重命名为 'destination'
-# 构建批量操作
-bulk_operations = []
+products_collection = mongo_db['permissions']
+permissions_collection = mongo_db['permissions']
 
-# 1. 处理 country 为 "China" 或 "Vietnam" 的文档
-for doc in products_collection.find({"country": {"$in": ["China", "Vietnam"]}}):
-    bulk_operations.append(
-        UpdateOne(
-            {"_id": doc["_id"]},
-            {
-                "$set": {
-                    "startland": doc["country"],      # 保留原值作为 startland
-                    "destination": "America"
-                },
-                "$unset": {"country": ""}             # 删除原 country 字段
-            }
-        )
-    )
+def migrate_menu_id_to_menu_ids():
+    """
+    将 permissions 集合中的 menu_id 字段迁移为 menu_ids 数组
+    """
+    print("开始数据迁移...")
+    
+    # 统计信息
+    total_count = 0
+    updated_count = 0
+    skipped_count = 0
+    error_count = 0
+    
+    # 查询所有包含 menu_id 字段的文档
+    cursor = permissions_collection.find({"menu_id": {"$exists": True}})
+    
+    for permission in cursor:
+        total_count += 1
+        permission_id = permission['_id']
+        menu_id = permission.get('menu_id')
+        
+        try:
+            # 检查是否已经有 menu_ids 字段
+            if 'menu_ids' in permission:
+                print(f"⚠️  权限 {permission.get('code')} 已存在 menu_ids 字段，跳过")
+                skipped_count += 1
+                continue
+            
+            # 构建新的 menu_ids 数组
+            menu_ids = []
+            if menu_id is not None and menu_id != "":
+                if isinstance(menu_id, str):
+                    menu_ids = [menu_id]
+                elif isinstance(menu_id, list):
+                    menu_ids = menu_id  # 如果已经是数组，直接使用
+            
+            # 更新文档：添加 menu_ids，删除 menu_id
+            update_result = permissions_collection.update_one(
+                {"_id": permission_id},
+                {
+                    "$set": {"menu_ids": menu_ids},
+                    "$unset": {"menu_id": ""}  # 删除旧字段
+                }
+            )
+            
+            if update_result.modified_count > 0:
+                updated_count += 1
+                print(f"✅ 更新权限: {permission.get('code')} | menu_id: '{menu_id}' -> menu_ids: {menu_ids}")
+            else:
+                print(f"⚠️  权限 {permission.get('code')} 未被修改")
 
-# 2. 处理 country 为 "Canada" 的文档
-for doc in products_collection.find({"country": "Canada"}):
-    bulk_operations.append(
-        UpdateOne(
-            {"_id": doc["_id"]},
-            {
-                "$set": {
-                    "startland": "China",
-                    "destination": "Canada"
-                },
-                "$unset": {"country": ""}
-            }
-        )
-    )
+        except Exception as e:
+            error_count += 1
+            print(f"❌ 更新权限 {permission.get('code')} 时出错: {str(e)}")
 
-# 执行批量更新
-if bulk_operations:
-    result = products_collection.bulk_write(bulk_operations)
-    print(f"成功更新 {result.modified_count} 个文档")
-else:
-    print("没有符合条件的文档需要更新")
+migrate_menu_id_to_menu_ids()
 # 读取Excel文件
 df = pd.read_excel(r'C:\Users\a1337\Desktop\301-更新-IT-海运.xlsx')  # 请替换为实际的Excel文件名
 df.fillna(0,inplace=True)

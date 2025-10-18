@@ -11,9 +11,8 @@ class PermissionItem(BaseModel):
     id: Optional[str] = None
     code: str                    # e.g., "product:read"
     name: str                    # e.g., "产品查看"
-    resource: str                # e.g., "product"
     action: str                  # e.g., "read"
-    menu_id: Optional[str] = None # 可选：关联菜单用于前端分组（非必须）
+    menu_ids: Optional[List[str]] = []  # 可选：关联菜单用于前端分组（非必须）
     description: Optional[str] = None
     dynamic_params: Optional[Dict] = None  # 动态参数，用于处理动态权限
 
@@ -21,9 +20,8 @@ class PermissionItem(BaseModel):
 class CreatePermissionItem(BaseModel):
     code: str                    # e.g., "product:read"
     name: str                    # e.g., "产品查看"
-    resource: str                # e.g., "product"
     action: str                  # e.g., "read"
-    menu_id: Optional[str] = None # 可选：关联菜单用于前端分组（非必须）
+    menu_ids: Optional[List[str]] = [] # 可选：关联菜单用于前端分组（非必须）
     description: Optional[str] = None
     dynamic_params: Optional[Dict] = None  # 动态参数，用于处理动态权限
 
@@ -44,9 +42,9 @@ async def get_permission_list(session = Depends(get_session)):
             "id": permission_id,
             "code": permission["code"],
             "name": permission["name"],
-            "resource": permission["resource"],
+            # "resource": permission["resource"],
             "action": permission["action"],
-            "menu_id": permission.get("menu_id"),
+            "menu_ids": permission.get("menu_ids"),
             "description": permission.get("description"),
             "dynamic_params": permission.get("dynamic_params")
         }
@@ -68,13 +66,35 @@ async def create_permission_item(permission_item: CreatePermissionItem, session 
         query["dynamic_params"] = permission_item.dynamic_params
     
     existing_permission = db.permissions.find_one(query)
-    if existing_permission:
-        raise HTTPException(status_code=400, detail="权限码已存在")
     
-    permission_dict = permission_item.dict(exclude_unset=True)
+    if existing_permission:
+        # 检查 menu_ids 是否相同
+        existing_menu_ids = set(existing_permission.get("menu_ids", []) or [])
+        new_menu_ids = set(permission_item.menu_ids or [])
         
-    result = db.permissions.insert_one(permission_dict)
-    return {"id": str(result.inserted_id)}
+        if existing_menu_ids != new_menu_ids:
+            # 如果 menu_ids 不同，合并两个集合
+            merged_menu_ids = list(existing_menu_ids.union(new_menu_ids))
+            
+            # 更新现有权限的 menu_ids
+            db.permissions.update_one(
+                {"_id": existing_permission["_id"]},
+                {"$set": {"menu_ids": merged_menu_ids}}
+            )
+            
+            return {
+                "id": str(existing_permission["_id"]), 
+                "message": "权限已存在，menu_ids 已更新合并",
+                "merged_menu_ids": merged_menu_ids
+            }
+        else:
+            # menu_ids 相同，返回已存在错误
+            raise HTTPException(status_code=400, detail="权限码已存在")
+    else:
+        # 权限不存在，创建新权限
+        permission_dict = permission_item.dict(exclude_unset=True)
+        result = db.permissions.insert_one(permission_dict)
+        return {"id": str(result.inserted_id)}
 
 
 @permission_item_router.post("/permission_item/check_exists", summary="检查权限是否存在（含动态参数）")
@@ -145,7 +165,7 @@ async def get_permission_by_id(permission_id: str, session = Depends(get_session
         "id": str(permission["_id"]),
         "code": permission["code"],
         "name": permission["name"],
-        "resource": permission["resource"],
+        # "resource": permission["resource"],
         "action": permission["action"],
         "menu_id": permission.get("menu_id"),
         "description": permission.get("description"),
@@ -154,112 +174,5 @@ async def get_permission_by_id(permission_id: str, session = Depends(get_session
     return PermissionItem(**permission_dict)
 
 
-@permission_item_router.get("/permission_item/search", response_model=List[PermissionItem], summary="搜索权限")
-async def search_permissions(resource: Optional[str] = None, action: Optional[str] = None, session = Depends(get_session)):
-    """根据资源或操作搜索权限"""
-    db = session
-    
-    query = {}
-    if resource:
-        query["resource"] = resource
-    if action:
-        query["action"] = action
-    
-    permissions = list(db.permissions.find(query))
-    
-    permission_list = []
-    for permission in permissions:
-        permission_dict = {
-            "id": str(permission["_id"]),
-            "code": permission["code"],
-            "name": permission["name"],
-            "resource": permission["resource"],
-            "action": permission["action"],
-            "menu_id": permission.get("menu_id"),
-            "description": permission.get("description"),
-            "dynamic_params": permission.get("dynamic_params")
-        }
-        permission_list.append(PermissionItem(**permission_dict))
-        
-    return permission_list
 
 
-@permission_item_router.post("/permission_item/generate_test_data", summary="生成测试权限数据")
-async def generate_test_permission_data(session = Depends(get_session)):
-    """生成测试权限数据"""
-    db = session
-    
-    # 清空现有权限数据
-    db.permissions.delete_many({})
-    
-    # 创建测试权限数据
-    test_permissions = [
-        {
-            "code": "user:read",
-            "name": "用户查看",
-            "resource": "user",
-            "action": "read",
-            "description": "查看用户信息的权限",
-            "dynamic_params": None
-        },
-        {
-            "code": "user:create",
-            "name": "用户创建",
-            "resource": "user",
-            "action": "create",
-            "description": "创建用户的权限",
-            "dynamic_params": None
-        },
-        {
-            "code": "user:update",
-            "name": "用户更新",
-            "resource": "user",
-            "action": "update",
-            "description": "更新用户信息的权限",
-            "dynamic_params": None
-        },
-        {
-            "code": "user:delete",
-            "name": "用户删除",
-            "resource": "user",
-            "action": "delete",
-            "description": "删除用户的权限",
-            "dynamic_params": None
-        },
-        {
-            "code": "product:read",
-            "name": "产品查看",
-            "resource": "product",
-            "action": "read",
-            "description": "查看产品的权限",
-            "dynamic_params": None
-        },
-        {
-            "code": "product:create",
-            "name": "产品创建",
-            "resource": "product",
-            "action": "create",
-            "description": "创建产品的权限",
-            "dynamic_params": None
-        },
-        {
-            "code": "order:read",
-            "name": "订单查看",
-            "resource": "order",
-            "action": "read",
-            "description": "查看订单的权限",
-            "dynamic_params": None
-        },
-        {
-            "code": "order:manage",
-            "name": "订单管理",
-            "resource": "order",
-            "action": "manage",
-            "description": "管理订单的权限",
-            "dynamic_params": None
-        }
-    ]
-    
-    result = db.permissions.insert_many(test_permissions)
-    
-    return {"message": "测试权限数据已生成", "count": len(result.inserted_ids)}

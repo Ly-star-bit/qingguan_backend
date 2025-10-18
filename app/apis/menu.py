@@ -15,33 +15,40 @@ class MenuItem(BaseModel):
     children: Optional[List['MenuItem']] = None
     path: Optional[str] = None
     api_endpoint_ids: Optional[List[str]] = None
+    sort_order:Optional[int] = None
 menu_router = APIRouter(tags=["menu"])
 
 @menu_router.get("/menu", response_model=List[MenuItem], summary="获取菜单树")
-async def get_menu_tree(session = Depends(get_session)):
+async def get_menu_tree(session=Depends(get_session)):
     """获取菜单树"""
     db = session
-    
+
     def get_children(parent_id):
         """递归获取子菜单"""
         children = list(db.menu.find({"parent_id": parent_id}))
+        # 排序逻辑：sort_order为空的放最后
+        children.sort(key=lambda x: (x.get("sort_order") is None, x.get("sort_order", 0)))
+        
         children_items = []
         for child in children:
             child_id = str(child["_id"])
             child_dict = {
                 "id": child_id,
-                "name": child["name"], 
+                "name": child["name"],
                 "parent_id": child["parent_id"],
-                "path": child.get("path",""),
+                "path": child.get("path", ""),
                 "api_endpoint_ids": child.get("api_endpoint_ids", []),
+                "sort_order": child.get("sort_order"),
                 "children": get_children(child_id)
             }
             children_items.append(MenuItem(**child_dict))
         return children_items
-    
+
     # 获取所有一级菜单
     root_menus = list(db.menu.find({"parent_id": None}))
-    
+    # 排序逻辑：sort_order为空的放最后
+    root_menus.sort(key=lambda x: (x.get("sort_order") is None, x.get("sort_order", 0)))
+
     menu_tree = []
     for root in root_menus:
         root_id = str(root["_id"])
@@ -49,12 +56,13 @@ async def get_menu_tree(session = Depends(get_session)):
             id=root_id,
             name=root["name"],
             parent_id=root.get("parent_id"),
-            path=root.get("path",""),
+            path=root.get("path", ""),
             api_endpoint_ids=root.get("api_endpoint_ids", []),
+            sort_order=root.get("sort_order"),
             children=get_children(root_id)
         )
         menu_tree.append(menu_item)
-        
+
     return menu_tree
 
 @menu_router.post("/menu", summary="创建菜单项")

@@ -123,11 +123,18 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
             request.state.user = payload 
 
             subject = payload.get("sub")
-            path = request.url.path
+            object = request.url.path
             action = request.method
-            env = {}
-            # if  'destination' in  env:
-
+            startland = request.query_params.get("startland")
+            destination = request.query_params.get("destination")
+            env = []
+            if startland:
+                env_child = {
+                    'startland':startland,
+                    'destination':destination
+                }
+                env.append(env_child)
+                
 
             if subject != "admin":
                 db = next(get_session())
@@ -138,11 +145,11 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
                         content={"detail": "系统已封禁"}
                     )
                 
-                # if not enforcer.enforce(subject, path, action):
-                #     return JSONResponse(
-                #         status_code=status.HTTP_403_FORBIDDEN,
-                #         content={"detail": "没有权限"}
-                #     )
+                if not enforcer.enforce(subject, object, action,env):
+                    return JSONResponse(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        content={"detail": "没有权限"}
+                    )
 
         except ExpiredSignatureError:
             return JSONResponse(

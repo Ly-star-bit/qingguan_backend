@@ -62,6 +62,7 @@ def dahuo_upload(orders):
     fail_upload_data = []
     error_msg = ""
     for order in orders:
+        print(order)
         try:
             upload_payload = {
                 "order": {
@@ -292,6 +293,7 @@ def dahuo_upload(orders):
             upload_payload["order"]["nb_channel_name"] = order.get(
                 "自营渠道", ""
             )  # 通过名称找id 不是必填
+  
             child_id,billing_unit = [
                 [i["chid"],i['billing_unit']]
                 for i in all_channel

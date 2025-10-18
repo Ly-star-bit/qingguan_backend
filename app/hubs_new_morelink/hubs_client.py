@@ -20,8 +20,11 @@ from .new_molink_decrypt import sm3_decrypt
 
 class HubsClient:
     def __init__(
-        self, session_file="./session/hubs_session.pkl", retry_counts=5,username=None,password=None,
-
+        self,
+        session_file="./session/hubs_session.pkl",
+        retry_counts=5,
+        username=None,
+        password=None,
     ) -> None:
         self.session_file = session_file
         self.retry_counts = retry_counts
@@ -29,7 +32,8 @@ class HubsClient:
         self.username = username
         self.password = password
         if self.username and self.password:
-             self.httpx_client = self.login_hubs_get_httpx_client()
+            self.httpx_client = self.login_hubs_get_httpx_client()
+            self.switchsys()
         else:
             # Check if we have a valid session locally first
             local_client = self.check_and_use_local_session()
@@ -38,6 +42,7 @@ class HubsClient:
             else:
                 # If no valid session, attempt to log in
                 self.httpx_client = self.login_hubs_get_httpx_client()
+                self.switchsys()
 
     def update_token(self, httpx_response_headeres: Response):
         if httpx_response_headeres.get("Access-Token"):
@@ -285,7 +290,9 @@ class HubsClient:
 
         data = {
             "id": track_id,
-            "loginpwd": sm3_decrypt("admin123") if not self.password else sm3_decrypt(self.password),
+            "loginpwd": sm3_decrypt("admin123")
+            if not self.password
+            else sm3_decrypt(self.password),
             "loginuser": "admin" if not self.username else self.username,
             "track": track_data,
         }
@@ -296,7 +303,7 @@ class HubsClient:
                 response = client.post(url, json=data)
                 # response.raise_for_status()  # Check for HTTP errors
                 login_response = response.json()
-                if login_response['code'] == 400 :
+                if login_response["code"] == 400:
                     return login_response
                 access_token = login_response["data"]["list"][0]["accessToken"]
                 headers["Authorization"] = f"Bearer {access_token}"
@@ -305,7 +312,11 @@ class HubsClient:
                     config_url = (
                         "https://admin.hubs-scs.com/api/v1/login/somauth/loginconfig"
                     )
-                    config_data = {"tenantid": "10849", "tid": 10849}
+                    company_data = login_response["data"]["list"][0]["company_list"][0]
+                    config_data = {
+                        "tenantid": company_data["tenantid"],
+                        "tid": company_data["tid"],
+                    }
 
                     config_response = client.post(
                         config_url, json=config_data, headers=headers
@@ -398,8 +409,8 @@ class HubsClient:
                     )  # Add auth header
 
                     # Save session for future use
-                    if self.username :
-                        return  {
+                    if self.username:
+                        return {
                             "Authorization": f"Bearer {access_token}",
                             "X-Authorization": f"Bearer {refresh_token}",
                         }
@@ -410,7 +421,7 @@ class HubsClient:
                     continue
             else:
                 logger.info(login_result)
-                if login_result['code'] == 400:
+                if login_result["code"] == 400:
                     logger.error("用户或密码错误")
                     return login_result
 
@@ -420,6 +431,38 @@ class HubsClient:
 
         logger.error("Hubs登陆失败，已尝试最大次数")
         return None
+
+    def switchsys(self, systype="server"):
+        url = "https://admin.hubs-scs.com/api/v1/login/somauth/switchsys"
+        payload = {"systype": systype}
+        response = self.httpx_client.post(url, json=payload)
+        # response.raise_for_status()
+
+        data = response.json()
+        self.update_token(response.headers)
+        if data["success"]:
+            access_token = response.headers.get("Access-Token") or response.headers.get(
+                "access-token"
+            )
+            x_access_token = response.headers.get(
+                "X-Access-Token"
+            ) or response.headers.get("x-access-token")
+            self.httpx_client.headers.update(
+                {
+                    "Authorization": f"Bearer {access_token}",
+                    "X-Authorization": f"Bearer {x_access_token}",
+                }
+            )
+            if self.username:
+                return {
+                    "Authorization": f"Bearer {access_token}",
+                    "X-Authorization": f"Bearer {x_access_token}",
+                }
+            self.save_session(access_token, x_access_token)
+            return self.httpx_client
+        elif not data["success"]:
+            logger.warning(f"切换失败,{data['message']}")
+            return data
 
     def get_customer_channels(
         self, keyword="", pageindex=1, pagesize=30, channel_type=2

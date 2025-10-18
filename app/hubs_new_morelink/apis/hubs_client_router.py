@@ -2,7 +2,7 @@ import io
 import os
 from dotenv import load_dotenv
 from fastapi import APIRouter, File, HTTPException, UploadFile, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse,JSONResponse
 import pandas as pd
 from app.hubs_new_morelink.upload import dahuo_upload, exec_generated_code
 from pathlib import Path
@@ -12,7 +12,11 @@ from app.hubs_new_morelink.schemas import DahuoUploadResponse,DahuoUploadSuccess
 from feapder.db.mysqldb import MysqlDB
 from loguru import logger
 import traceback
-
+from fastapi import status
+from app.hubs_new_morelink.smarty import validate_address as smarty_validate_address
+from app.hubs_new_morelink.remotecheck import all_remoteaddresscheck_process
+from pydantic import BaseModel, Field
+from typing import Optional
 hubs_router = APIRouter(tags=["hubs_client"],prefix='/hubs_client')
 load_dotenv()
 
@@ -41,9 +45,9 @@ async def get_all_client_names():
             to_json=True
         )
         client_names = [row["client_name"] for row in result] if result else []
-        return {"success": True, "data": client_names, "total": len(client_names)}
+        return JSONResponse({"success": True, "data": client_names, "total": len(client_names),'code':200})
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return JSONResponse({"success": False, "message": str(e),"code":500})
 
 @hubs_router.post("/execute_dahuo_upload", summary="执行大货上传建单", response_model=DahuoUploadResponse)
 async def execute_dahuo_upload(
@@ -64,10 +68,14 @@ async def execute_dahuo_upload(
             to_json=True,
             limit=1
         )
-        logger.info(client_data)
+        # logger.info(client_data)
         if not client_data:
-            raise HTTPException(status_code=404, detail=f"客户 {client_name} 不存在")
-        
+
+            return JSONResponse({
+                "code":404,
+                "message":f"客户 {client_name} 不存在"
+            })
+          
         success_code = client_data["success_code"]
         
         # 2. 保存上传的文件到 ./file/hubs_client 目录
@@ -83,11 +91,14 @@ async def execute_dahuo_upload(
         # 3. 调用处理逻辑
         dataframe, error_msg = exec_generated_code(success_code, file_path)
         if dataframe is None:
-            raise HTTPException(status_code=400, detail=f"数据处理失败: {error_msg}")
+             return JSONResponse({
+                "code":400,
+                "message":f"数据处理失败: {error_msg}"
+            })
         
         data = dataframe.to_dict(orient="records")
         # hubs_client = HubsClient()
-        success_data, fail_data = dahuo_upload(data)  # 修正拼写：sucess_data → success_data
+        success_data, fail_data,upload_error_msg = dahuo_upload(data)  # 修正拼写：sucess_data → success_data
 
         # 4. 将 success_data 转为 Excel 并返回
                # ✅ 关键：将 dict 列表转换为 SuccessItem 列表（Pydantic 会自动验证）
@@ -97,19 +108,19 @@ async def execute_dahuo_upload(
             items.append(
                 DahuoUploadSuccessItem(
                     shipmendID=item.get("shipmendID", ""),
-                    A单号=item.get("A单号", ""),
-                    箱数=item.get("箱数", ""),
-                    体积=item.get("体积", ""),
-                    实重=item.get("实重", ""),
-                    fba仓库=item.get("fba仓库", ""),
-                    邮编=item.get("邮编", ""),
-                    sono=item.get("sono", "")
+                    operNo=item.get("A单号", ""),
+                    boxNum=item.get("箱数", ""),
+                    Volume=item.get("体积", ""),
+                    Weight=item.get("实重", ""),
+                    fbaWarehouse=item.get("fba仓库", ""),
+                    zipCode=item.get("邮编", ""),
+                    Sono=item.get("sono", "")
                 )
             )
 
         return DahuoUploadResponse(
             code=200,
-            msg="上传并建单成功",
+            message="上传并建单成功",
             data=items
         )
         # if not success_data:
@@ -152,4 +163,46 @@ async def login(username,password):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class CheckRdiRemoteRequest(BaseModel):
+    street: str = Field(..., example="123 Main St")
+    city: str = Field(..., example="Austin")
+    state: str = Field(..., min_length=2, max_length=2, example="TX")
+    zipcode: str = Field(..., min_length=5, max_length=10, example="78701")
+#
+@hubs_router.post(
+    "/check_rdi_remote",
+    summary="检测住宅地址（RDI）和是否偏远地区",
+    response_description="返回地址验证结果与偏远状态"
+)
+async def check_rdi_remote(rdi_remote_data: CheckRdiRemoteRequest):
+    try:
+        # Step 1: 调用 Smarty 验证地址并获取 RDI 信息
+        rdi_response = smarty_validate_address(
+            street=rdi_remote_data.street,
+            city=rdi_remote_data.city,
+            state=rdi_remote_data.state.upper().strip(),
+            zipcode=rdi_remote_data.zipcode.strip()
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"地址验证服务异常: {str(e)}"
+        )
 
+
+
+    # Step 3: 检查是否偏远地区（基于 ZIP）
+    try:
+        remote_result = all_remoteaddresscheck_process(rdi_remote_data.zipcode.strip())
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"偏远地址检查失败: {str(e)}"
+        )
+
+    # Step 4: 构造清晰的响应
+    return {
+        "rdi":rdi_response,
+        "remote_result": remote_result,  # 假设 remote_result 为 True/False 或非空即偏远
+        "zipcode": rdi_remote_data.zipcode.strip()
+    }

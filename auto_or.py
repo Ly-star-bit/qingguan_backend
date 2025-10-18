@@ -174,9 +174,9 @@ def optimize_packing_selection(
     model += total_value_usd >= alpha * W_target, "Min_Value_Weight_Ratio"
 
     # 4. 税金/重量比率约束
-    if not expansion_factor:
-        total_tax_cny = lp.lpSum([tax_per_box_cny[i] * b[i] for i in range(n)])
-        model += total_tax_cny <= beta_cny * W_target, "Max_Tax_Weight_Ratio"
+    # if not expansion_factor:
+    total_tax_cny = lp.lpSum([tax_per_box_cny[i] * b[i] for i in range(n)])
+    model += total_tax_cny <= beta_cny * W_target, "Max_Tax_Weight_Ratio"
 
     # 5. 最多选择k个品类约束
     model += lp.lpSum([z[i] for i in range(n)]) == k, "Max_Product_Selection"
@@ -369,7 +369,7 @@ if __name__ == "__main__":
         "exchange_rate": 7.22,
         "k": 3,
         "min_boxes_per_product": 20,
-        "expansion_factor": 2,
+        "expansion_factor": None,
     }
     products_data = upload_data["products_data"]
     result = optimize_packing_selection(

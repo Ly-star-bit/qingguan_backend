@@ -154,21 +154,6 @@ async def generate_test_menu(session = Depends(get_session)):
     return {"message": "测试菜单数据已生成"}
 
 
-@menu_router.get("/menu/user/get_user_menu_permissions", summary="获取用户菜单权限")
-async def get_user_menu_permissions(user_id: str, session = Depends(get_session)):
-    """获取用户菜单权限"""
-    db = session
-    user = db.users.find_one({"_id": ObjectId(user_id)})
-    if user.get("username") == "admin":
-        return ["*"]
-    return user.get("menu_ids", [])
-
-
-
-
-
-
-
 
 @menu_router.put("/menu/user/update_user_menu_permissions", summary="更新用户菜单权限")
 async def update_user_menu_permissions(update_user_menu_permissions: UpdateUserMenuPermissions, session = Depends(get_session)):

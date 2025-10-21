@@ -68,6 +68,27 @@ def read_products(
         product.pop("_id", None)
 
     return {"items": products, "total": total}
+@air_product_router.get("/categories/list", response_model=dict, summary="获取所有类别列表")
+def get_categories(
+    startland: str = "China",
+    destination: str = "America",
+    session: MongoClient = Depends(get_session),
+):
+    """获取指定路线的所有产品类别"""
+    db = session
+    
+    query = {"destination": destination, "startland": startland}
+    
+    # 使用 distinct 获取所有不同的类别值
+    categories = db.products.distinct("类别", query)
+    
+    return {
+        "categories": sorted(categories) if categories else [],
+        "total": len(categories) if categories else 0
+    }
+
+
+
 
 
 @air_product_router.post("/upload_huomian_file", summary="上传货免文件")

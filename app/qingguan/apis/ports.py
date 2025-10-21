@@ -8,18 +8,31 @@ from fastapi import (
     Depends,
     HTTPException
 )
+from typing import Any, Dict
+from fastapi.encoders import jsonable_encoder
+
 
 
 from app.db_mongo import get_session
 ports_router = APIRouter(tags=['港口'],prefix="/ports")
+
+
 @ports_router.post("/", summary="创建港口")
-def create_port(port: dict, session: MongoClient = Depends(get_session)):
-    db = session
-    port_dict = port
-    port_dict.pop("id", None)
-    result = db.ports.insert_one(port_dict)
-    port_dict["id"] = str(result.inserted_id)
-    return port_dict
+def create_port(port: Dict[str, Any], session: MongoClient = Depends(get_session)):
+    db = session  # 假设这里已经是 Database 对象
+    # 先把请求体里的潜在 ObjectId 等可序列化处理好，并去掉 id/_id
+    doc = jsonable_encoder(
+        port,
+        custom_encoder={ObjectId: str}
+    )
+    doc.pop("id", None)
+    doc.pop("_id", None)
+
+    result = db.ports.insert_one(doc)
+
+    # 返回值同样走一次 encoder，确保没有原始 ObjectId
+    response = {**doc, "id": str(result.inserted_id)}
+    return jsonable_encoder(response, custom_encoder={ObjectId: str})
 
 
 @ports_router.get("/", summary="获取港口列表")

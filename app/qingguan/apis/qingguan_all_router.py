@@ -30,6 +30,7 @@ from .ports import ports_router
 from .sea_product import sea_product_router
 from .shipper_receiver import shipperandreceiver_router
 from .sea_tidan_log import sea_tidan_log_router,create_shipment_log
+from .tariff import tariff_router
 import os
 from pathlib import Path
 import random
@@ -83,6 +84,7 @@ qingguan_router.include_router(ports_router)
 qingguan_router.include_router(sea_product_router)
 qingguan_router.include_router(shipperandreceiver_router)
 qingguan_router.include_router(sea_tidan_log_router)
+qingguan_router.include_router(tariff_router)
 
 
 

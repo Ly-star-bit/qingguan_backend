@@ -9,8 +9,8 @@ from pydantic import BaseModel
 # 定义权限模型
 class PermissionItem(BaseModel):
     id: Optional[str] = None
-    code: str                    # e.g., "product:read"
-    name: str                    # e.g., "产品查看"
+    code: str                   
+    name: str                   
     action: str                  # e.g., "read"
     menu_ids: Optional[List[str]] = []  # 可选：关联菜单用于前端分组（非必须）
     description: Optional[str] = None
@@ -18,8 +18,8 @@ class PermissionItem(BaseModel):
 
 
 class CreatePermissionItem(BaseModel):
-    code: str                    # e.g., "product:read"
-    name: str                    # e.g., "产品查看"
+    code: str                   
+    name: str                  
     action: str                  # e.g., "read"
     menu_ids: Optional[List[str]] = [] # 可选：关联菜单用于前端分组（非必须）
     description: Optional[str] = None

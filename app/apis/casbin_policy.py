@@ -197,8 +197,23 @@ async def check_permission(subject: str, object: str, action: str, env: Optional
 
 @policy_router.get("/policies/get_user_policies")
 async def get_user_policies(username: str):
-    """获取某用户的 p 策略（按 sub 过滤）"""
-    policies = enforcer.get_filtered_named_policy("p", 0, username)
+    """获取用户的策略（按 sub 过滤）
+    
+    如果是 admin user 则返回所有的策略
+    """
+    # 检查是否为 admin 用户
+    is_admin = enforcer.get_filtered_named_policy("p", 0, "admin") or \
+               username == "admin" or \
+               enforcer.has_grouping_policy(username, "admin")
+    
+    # 获取策略
+    if is_admin:
+        # admin 用户获取所有策略
+        policies = enforcer.get_named_policy("p")
+    else:
+        # 普通用户只获取自己的策略
+        policies = enforcer.get_filtered_named_policy("p", 0, username)
+    
     return [{
         "ptype": "p",
         "sub": p[0],
@@ -208,6 +223,7 @@ async def get_user_policies(username: str):
         "eft": p[4] if len(p) > 4 and p[4] else "allow",
         "description": p[5] if len(p) > 5 else ""
     } for p in policies]
+
 
 @policy_router.post("/policies/groups")
 async def add_group(group: Group):
@@ -253,3 +269,5 @@ async def update_group(group_with_policies: GroupWithPolicies):
 @policy_router.get("/policies/groups")
 async def get_groups():
     return enforcer.get_all_roles()
+
+

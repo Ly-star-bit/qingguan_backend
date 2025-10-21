@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.db_mongo import get_session
 class FactoryData(BaseModel):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: Optional[str] = Field(default=None)
     属性: str = Field(max_length=255, nullable=False)
     中文名字: str = Field(max_length=255, nullable=False)
     英文: str = Field(nullable=False)

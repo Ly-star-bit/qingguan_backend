@@ -7,42 +7,40 @@ import uuid
 from bson import ObjectId
 from pymongo import MongoClient
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    HTTPException,
-    UploadFile
-)
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 
 from app.db_mongo import get_session
 from .air_product import upload_huomian_file
-sea_product_router = APIRouter(tags=["海运产品"], prefix="/products_sea")
+from app.qingguan.utils import require_products_permission
+
+sea_product_router = APIRouter(
+    tags=["海运产品"],
+    prefix="/products_sea",
+    dependencies=[Depends(require_products_permission)],
+)
+
+
 @sea_product_router.get("/", response_model=dict, summary="获取海运产品列表")
 def read_products_sea(
     skip: int = 0,
     limit: int = 10,
     名称: Optional[str] = None,
     get_all: bool = False,
-    startland:str = "China",
+    startland: str = "China",
     destination: str = "America",
     zishui: bool = None,
     is_hidden: bool = None,
     session: MongoClient = Depends(get_session),
 ):
     db = session
-    query = {"destination": destination,"startland":startland}
+    query = {"destination": destination, "startland": startland}
     if is_hidden is not None:
         if is_hidden:
             query["is_hidden"] = True
         else:
-            query["$or"] = [
-                {"is_hidden": False},
-                {"is_hidden": {"$exists": False}}
-            ]
+            query["$or"] = [{"is_hidden": False}, {"is_hidden": {"$exists": False}}]
     if 名称:
         # query["中文品名"] = {"$regex": 名称}
         query["中文品名"] = 名称
@@ -127,14 +125,12 @@ def update_product_sea(
     if not existing_product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    update_data = {
-        k: v for k, v in product_data.items() if k != "id" and v is not None 
-    }
+    update_data = {k: v for k, v in product_data.items() if k != "id" and v is not None}
 
     if file:
         file_name = upload_huomian_file(file)["file_name"]
         update_data["huomian_file_name"] = file_name
-    
+
     try:
         if update_data.get("single_weight"):
             update_data["single_weight"] = float(update_data["single_weight"])
@@ -151,8 +147,12 @@ def update_product_sea(
         return updated_product
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
 @sea_product_router.post("/bulk_hide", summary="批量隐藏/显示海运产品")
-def bulk_hide_products(bulk_hide:str = Form(...), session: MongoClient = Depends(get_session)):
+def bulk_hide_products(
+    bulk_hide: str = Form(...), session: MongoClient = Depends(get_session)
+):
     db = session
     try:
         bulk_hide_data = json.loads(bulk_hide)
@@ -161,15 +161,17 @@ def bulk_hide_products(bulk_hide:str = Form(...), session: MongoClient = Depends
 
     product_ids = bulk_hide_data.get("product_ids", [])
     is_hidden = bulk_hide_data.get("is_hidden", False)
-    
+
     # Convert string IDs to ObjectId
     object_ids = []
     try:
         object_ids = [ObjectId(pid) for pid in product_ids]
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid product ID format")
-        
-    db.products_sea.update_many({"_id": {"$in": object_ids}}, {"$set": {"is_hidden": is_hidden}})
+
+    db.products_sea.update_many(
+        {"_id": {"$in": object_ids}}, {"$set": {"is_hidden": is_hidden}}
+    )
     return {"message": "Products hidden successfully"}
 
 
@@ -183,4 +185,3 @@ def delete_product_sea(product_id: str, session: MongoClient = Depends(get_sessi
     product["id"] = str(product["_id"])
     product.pop("_id", None)
     return product
-

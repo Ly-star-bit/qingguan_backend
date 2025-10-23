@@ -62,6 +62,7 @@ EXCLUDED_PATHS = {
     "/process_excel_usp_data",
     "/refresh",
     "/17track/notify",
+    '/menu/user/get_user_menu_permissions'
 }
 
 # 前缀排除（用于 /static/xxx, /tiles/xxx 等）
@@ -125,17 +126,16 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
             subject = payload.get("sub")
             object = request.url.path
             action = request.method
-            startland = request.query_params.get("startland")
-            destination = request.query_params.get("destination")
-            env = []
-            if startland:
-                env_child = {
-                    'startland':startland,
-                    'destination':destination
-                }
-                env.append(env_child)
+            # startland = request.query_params.get("startland")
+            # destination = request.query_params.get("destination")
+            # env = dict()
+            # if startland:
+            #     env = {
+            #         'startland':startland,
+            #         'destination':destination
+            #     }
+            #     # env.append(env_child)
                 
-
             if subject != "admin":
                 db = next(get_session())
                 system_status = db.system_status.find_one({"_id": "system_forbidden"})
@@ -145,7 +145,7 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
                         content={"detail": "系统已封禁"}
                     )
                 
-                if not enforcer.enforce(subject, object, action,env):
+                if not enforcer.enforce(subject, object, action,{}):
                     return JSONResponse(
                         status_code=status.HTTP_403_FORBIDDEN,
                         content={"detail": "没有权限"}

@@ -13,7 +13,6 @@ from feapder.db.mysqldb import MysqlDB
 from loguru import logger
 import traceback
 
-hubs_router = APIRouter(tags=["hubs_client"],prefix='/hubs_client')
 load_dotenv()
 
 

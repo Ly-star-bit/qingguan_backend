@@ -1,3 +1,4 @@
+from collections import defaultdict
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from typing import Dict, List, Optional
 from app.db_mongo import get_session, enforcer
@@ -6,6 +7,9 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.schemas import UpdateUserMenuPermissions
+from typing import List, Dict, Any
+from bson import ObjectId
+import json
 
 # 定义菜单模型
 class MenuItem(BaseModel):
@@ -27,7 +31,8 @@ async def get_menu_tree(session=Depends(get_session)):
         """递归获取子菜单"""
         children = list(db.menu.find({"parent_id": parent_id}))
         # 排序逻辑：sort_order为空的放最后
-        children.sort(key=lambda x: (x.get("sort_order") is None, x.get("sort_order", 0)))
+        children.sort(key=lambda x: (x.get("sort_order") is None, x.get("sort_order") or 0))
+
         
         children_items = []
         for child in children:
@@ -47,7 +52,8 @@ async def get_menu_tree(session=Depends(get_session)):
     # 获取所有一级菜单
     root_menus = list(db.menu.find({"parent_id": None}))
     # 排序逻辑：sort_order为空的放最后
-    root_menus.sort(key=lambda x: (x.get("sort_order") is None, x.get("sort_order", 0)))
+    # root_menus.sort(key=lambda x: (x.get("sort_order") is None, x.get("sort_order", 0)))
+    root_menus.sort(key=lambda x: (x.get("sort_order") is None, x.get("sort_order") or 0))
 
     menu_tree = []
     for root in root_menus:
@@ -110,59 +116,264 @@ async def delete_menu_item(menu_id: str, session = Depends(get_session)):
         raise HTTPException(status_code=404, detail="Menu item not found")
     return {"message": "Menu item deleted"}
 
-@menu_router.post("/menu/generate_test_data", summary="生成测试菜单数据")
-async def generate_test_menu(session = Depends(get_session)):
-    """生成测试菜单数据"""
+
+
+@menu_router.get(
+    "/menu/user/get_user_menu_permissions",
+    response_model=List[MenuItem],
+    summary="获取用户菜单权限",
+)
+async def get_user_menu_permissions(username: str, session=Depends(get_session)):
+    """
+    1) 获取用户隐式权限（含角色继承），只保留 allow 的 p 规则
+    2) (Path, Method) → 批量反查 api_endpoints，拿到 endpoint._id
+    3) 用 endpoint._id 反查 permissions（code），并用动态参数做子集匹配
+    4) 依据命中的 permissions.menu_ids 构建“只包含授权分支”的菜单树（含祖先、排序）
+    """
     db = session
-    
-    # 清空现有菜单数据
-    db.menu.delete_many({})
-    
-    # 创建一级菜单
-    root_menus = [
-        {"name": "系统管理"},
-        {"name": "业务管理"},
-        {"name": "报表管理"}
-    ]
-    
-    for root_menu in root_menus:
-        result = db.menu.insert_one(root_menu)
-        root_id = str(result.inserted_id)
-        
-        # 为每个一级菜单创建子菜单
-        if root_menu["name"] == "系统管理":
-            children = [
-                {"name": "用户管理", "parent_id": root_id},
-                {"name": "角色管理", "parent_id": root_id},
-                {"name": "权限管理", "parent_id": root_id}
-            ]
-        elif root_menu["name"] == "业务管理":
-            children = [
-                {"name": "订单管理", "parent_id": root_id},
-                {"name": "客户管理", "parent_id": root_id},
-                {"name": "产品管理", "parent_id": root_id}
-            ]
+
+    # --- admin 直接返回完整菜单树 ---
+    is_admin = (username == "admin") or ("admin" in enforcer.get_implicit_roles_for_user(username))
+    if is_admin:
+        return _build_full_menu_tree(db)
+
+    # --- 1) 取 Casbin 隐式权限，仅保留 allow 的 p 规则；解析 attrs ---
+    raw = enforcer.get_implicit_permissions_for_user(username)
+    # 你贴的 row 结构: [sub, path, method, attrs_json, eft, desc]
+    def parse_attrs(raw_attrs: Any) -> Dict[str, Any]:
+        if raw_attrs in (None, "", "[]", "{}", []):
+            return {}
+        if isinstance(raw_attrs, dict):
+            return raw_attrs
+        try:
+            data = json.loads(raw_attrs)
+            if isinstance(data, list):
+                merged = {}
+                for it in data:
+                    if isinstance(it, dict):
+                        merged.update(it)
+                return merged
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {}
+
+    policies: List[tuple[str, str, Dict[str, Any]]] = []
+    for row in raw:
+        # 容错：长度不足时跳过
+        if len(row) < 5:
+            continue
+        sub, path, method, attrs_json, eft, *_ = row
+        if str(eft).lower() != "allow":
+            continue
+        if not path or not method:
+            continue
+        norm_path = (path or "/").rstrip("/") or "/"
+        norm_method = (method or "").upper()
+        attrs = parse_attrs(attrs_json)
+        policies.append((norm_path, norm_method, attrs))
+
+    if not policies:
+        return []
+
+    # 去重（path+method+attrs）
+    seen = set()
+    uniq = []
+    for p in policies:
+        k = f'{p[0]}::{p[1]}::{json.dumps(p[2], sort_keys=True, ensure_ascii=False)}'
+        if k not in seen:
+            seen.add(k)
+            uniq.append(p)
+    policies = uniq
+
+    # --- 2) 批量反查 endpoint（建议建立 {Path:1, Method:1} 联合索引）---
+    path_set = {p[0] for p in policies}
+    eps = list(db.api_endpoints.find(
+        {"Path": {"$in": list(path_set)}},
+        {"_id": 1, "Path": 1, "Method": 1}
+    ))
+
+    # Path::Method → [endpoint_id]
+    ep_index: Dict[str, List[ObjectId]] = {}
+    for ep in eps:
+        k = f'{(ep.get("Path") or "/").rstrip("/") or "/"}::{str(ep.get("Method") or "").upper()}'
+        ep_index.setdefault(k, []).append(ep["_id"])
+
+    endpoint_ids: set[ObjectId] = set()
+    # endpoint_id → 多个 casbin attrs（同一接口可能多条策略）
+    policy_map: Dict[str, List[Dict[str, Any]]] = {}
+    for path, method, attrs in policies:
+        k = f"{path}::{method}"
+        for eid in ep_index.get(k, []):
+            endpoint_ids.add(eid)
+            policy_map.setdefault(str(eid), []).append(attrs)
+
+    if not endpoint_ids:
+        return []
+
+    # --- 3) 反查 permissions（code）+ 动态参数子集匹配 ---
+    oid_list = list(endpoint_ids)
+    str_list = [str(x) for x in oid_list]
+    candidates = list(db.permissions.find({
+        "$or": [
+            {"code": {"$in": oid_list}},   # code 为 ObjectId
+            {"code": {"$in": str_list}},   # code 为字符串
+        ]
+    }))
+
+    def dyn_subset(perm_dyn: Dict[str, Any] | None, casbin_dyn: Dict[str, Any]) -> bool:
+        """判断 permission.dynamic_params ⊆ casbin_attrs"""
+        perm_dyn = perm_dyn or {}
+        if not perm_dyn:
+            # perm 无动态参数：仅当 casbin 也无动态参数时匹配“无参版本”
+            return not casbin_dyn
+        for k, v in perm_dyn.items():
+            if k not in casbin_dyn:
+                return False
+            if str(casbin_dyn[k]) != str(v):
+                return False
+        return True
+
+    authorized_menu_ids: set[str] = set()
+    matched_permissions: List[dict] = []
+
+    for perm in candidates:
+        code = perm.get("code")
+        # 统一用字符串 key 查询 policy_map
+        key1 = None
+        if isinstance(code, ObjectId):
+            key1 = str(code)
         else:
-            children = [
-                {"name": "销售报表", "parent_id": root_id},
-                {"name": "财务报表", "parent_id": root_id},
-                {"name": "库存报表", "parent_id": root_id}
-            ]
-            
-        db.menu.insert_many(children)
-        
-    return {"message": "测试菜单数据已生成"}
+            # 尝试把字符串转成 ObjectId 字符串，不可转就当原字符串
+            try:
+                key1 = str(ObjectId(str(code)))
+            except Exception:
+                key1 = str(code)
+
+        casbin_attrs_list = policy_map.get(key1, [])
+        if not casbin_attrs_list:
+            continue
+
+        perm_dyn = perm.get("dynamic_params") or {}
+        # 子集匹配（任一条 casbin 策略覆盖即可）
+        ok = any(dyn_subset(perm_dyn, cattrs) for cattrs in casbin_attrs_list)
+        if not ok:
+            continue
+
+        # scope 规则（与 casbin attrs 中包含 scope 时对齐；若 casbin 未给 scope，则不强制剔除）
+        scope_from_perm = str(perm_dyn.get("scope", "")).strip().lower()
+        casbin_scopes = {str(ca.get("scope", "")).strip().lower() for ca in casbin_attrs_list if "scope" in ca}
+        if casbin_scopes:  # 只有当 casbin 明确给 scope 时，才按 scope 过滤 permission
+            if scope_from_perm and scope_from_perm not in casbin_scopes:
+                continue
+
+        matched_permissions.append(perm)
+        for mid in perm.get("menu_ids") or []:
+            if mid:
+                authorized_menu_ids.add(mid)
+
+    if not authorized_menu_ids:
+        return []
+
+    # --- 4) 祖先补齐 + 只保留授权分支的树 ---
+    # 祖先补齐
+    def add_parent_menus(menu_id: str, authorized_set: set[str]):
+        m = db.menu.find_one({"_id": ObjectId(menu_id)})
+        if m and m.get("parent_id"):
+            pid = m["parent_id"]
+            if pid not in authorized_set:
+                authorized_set.add(pid)
+                add_parent_menus(pid, authorized_set)
+
+    for mid in list(authorized_menu_ids):
+        add_parent_menus(mid, authorized_menu_ids)
+
+    # 构建剪枝树
+    return _build_pruned_menu_tree(db, authorized_menu_ids)
 
 
+# ========== 辅助：构建完整树 ==========
+def _build_full_menu_tree(db) -> List[MenuItem]:
+    def sort_key(m): return (m.get("sort_order") is None, m.get("sort_order") or 0)
 
-@menu_router.put("/menu/user/update_user_menu_permissions", summary="更新用户菜单权限")
-async def update_user_menu_permissions(update_user_menu_permissions: UpdateUserMenuPermissions, session = Depends(get_session)):
-    """更新用户菜单权限"""
-    db = session
-    user_id = update_user_menu_permissions.user_id
-    menu_ids = update_user_menu_permissions.menu_ids
-    db.users.update_one(
-        {"_id": ObjectId(user_id)},
-        {"$set": {"menu_ids": menu_ids}}
-    )
-    return {"message": "菜单权限更新成功"}
+    def children_of(pid):
+        cs = list(db.menu.find({"parent_id": pid}))
+        cs.sort(key=sort_key)
+        out = []
+        for ch in cs:
+            out.append(MenuItem(
+                id=str(ch["_id"]),
+                name=ch["name"],
+                parent_id=ch.get("parent_id"),
+                path=ch.get("path", ""),
+                api_endpoint_ids=ch.get("api_endpoint_ids", []),
+                sort_order=ch.get("sort_order"),
+                children=children_of(str(ch["_id"]))
+            ))
+        return out
+
+    roots = list(db.menu.find({"parent_id": None}))
+    roots.sort(key=sort_key)
+    tree = []
+    for r in roots:
+        tree.append(MenuItem(
+            id=str(r["_id"]),
+            name=r["name"],
+            parent_id=r.get("parent_id"),
+            path=r.get("path", ""),
+            api_endpoint_ids=r.get("api_endpoint_ids", []),
+            sort_order=r.get("sort_order"),
+            children=children_of(str(r["_id"]))
+        ))
+    return tree
+
+
+# ========== 辅助：按授权集合剪枝 ==========
+def _build_pruned_menu_tree(db, allowed_ids: set[str]) -> List[MenuItem]:
+    def sort_key(m): return (m.get("sort_order") is None, m.get("sort_order") or 0)
+
+    all_menus = list(db.menu.find({}))
+    by_id = {str(m["_id"]): m for m in all_menus}
+    children: Dict[str, List[dict]] = {}
+    roots = []
+    for m in all_menus:
+        pid = m.get("parent_id")
+        if pid is None:
+            roots.append(m)
+        else:
+            children.setdefault(pid, []).append(m)
+
+    # 只保留 need_ids（授权节点 + 祖先）
+    need_ids = set(allowed_ids)
+
+    def build(node: dict) -> MenuItem | None:
+        mid = str(node["_id"])
+        if mid not in need_ids:
+            return None
+        raw_children = sorted(children.get(mid, []), key=sort_key)
+        built_children: List[MenuItem] = []
+        for ch in raw_children:
+            b = build(ch)
+            if b is not None:
+                built_children.append(b)
+        # 既不是授权节点也没有授权子节点 → 丢弃
+        if mid not in allowed_ids and not built_children:
+            return None
+        return MenuItem(
+            id=mid,
+            name=node["name"],
+            parent_id=node.get("parent_id"),
+            path=node.get("path", ""),
+            api_endpoint_ids=node.get("api_endpoint_ids", []),
+            sort_order=node.get("sort_order"),
+            children=built_children
+        )
+
+    roots_sorted = sorted(roots, key=sort_key)
+    out: List[MenuItem] = []
+    for r in roots_sorted:
+        b = build(r)
+        if b is not None:
+            out.append(b)
+    return out

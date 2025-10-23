@@ -1,52 +1,60 @@
 import json
 import os
-from pathlib import Path
 import traceback
-from datetime import datetime
-from typing import Optional
 import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
 import pandas as pd
 from bson import ObjectId
-from pymongo import MongoClient
-
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
     HTTPException,
-    UploadFile
+    UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
-
+from pymongo import MongoClient
 
 from app.db_mongo import get_session
 
+from app.qingguan.utils import require_products_permission
 
-air_product_router = APIRouter(prefix="/products", tags=["空运产品"])
-@air_product_router.get("/", response_model=dict, summary="获取产品列表")
+air_product_router = APIRouter(
+    prefix="/products",
+    tags=["空运产品"],
+    dependencies=[Depends(require_products_permission)],
+)
+
+
+@air_product_router.get(
+    "/",
+    response_model=dict,
+    summary="获取产品列表",
+)
 def read_products(
     skip: int = 0,
     limit: int = 10,
     名称: Optional[str] = None,
     get_all: bool = False,
-    startland:str = "China",
+    startland: str = "China",
     destination: str = "America",
     zishui: bool = None,
-    is_hidden:bool=None,
+    is_hidden: bool = None,
     session: MongoClient = Depends(get_session),
 ):
     db = session
-    query = {"destination": destination,"startland":startland}
+    query = {"destination": destination, "startland": startland}
+
     if is_hidden is not None:
         if is_hidden:
             query["is_hidden"] = True
         else:
-            query["$or"] = [
-                {"is_hidden": False},
-                {"is_hidden": {"$exists": False}}
-            ]
+            query["$or"] = [{"is_hidden": False}, {"is_hidden": {"$exists": False}}]
     if zishui is not None:
         if zishui:
             query["自税"] = {"$in": [1, True]}
@@ -68,7 +76,13 @@ def read_products(
         product.pop("_id", None)
 
     return {"items": products, "total": total}
-@air_product_router.get("/categories/list", response_model=dict, summary="获取所有类别列表")
+
+
+@air_product_router.get(
+    "/categories/list",
+    response_model=dict,
+    summary="获取所有类别列表",
+)
 def get_categories(
     startland: str = "China",
     destination: str = "America",
@@ -76,19 +90,16 @@ def get_categories(
 ):
     """获取指定路线的所有产品类别"""
     db = session
-    
+
     query = {"destination": destination, "startland": startland}
-    
+
     # 使用 distinct 获取所有不同的类别值
     categories = db.products.distinct("类别", query)
-    
+
     return {
         "categories": sorted(categories) if categories else [],
-        "total": len(categories) if categories else 0
+        "total": len(categories) if categories else 0,
     }
-
-
-
 
 
 @air_product_router.post("/upload_huomian_file", summary="上传货免文件")
@@ -126,7 +137,10 @@ def create_product(
     return product_data
 
 
-@air_product_router.get("/{pic_name}", summary="下载货免文件")
+@air_product_router.get(
+    "/{pic_name}",
+    summary="下载货免文件",
+)
 def download_pic(pic_name: str):
     file_path = os.path.join("./file/huomian_file/", pic_name)
     if not os.path.exists(file_path):
@@ -153,14 +167,12 @@ def update_product(
     if not existing_product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    update_data = {
-        k: v for k, v in product_data.items() if k != "id" and v is not None 
-    }
+    update_data = {k: v for k, v in product_data.items() if k != "id" and v is not None}
 
     if file:
         file_name = upload_huomian_file(file)["file_name"]
         update_data["huomian_file_name"] = file_name
-    
+
     try:
         if update_data.get("single_weight"):
             update_data["single_weight"] = float(update_data["single_weight"])
@@ -177,24 +189,29 @@ def update_product(
         return updated_product
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-@air_product_router.post("/update_batch", summary="批量更新产品信息")
+
+
+@air_product_router.post(
+    "/update_batch",
+    summary="批量更新产品信息",
+)
 def update_batch(
     transport_type: str = "",
     file: UploadFile = File(...),
-    session: MongoClient = Depends(get_session)
+    session: MongoClient = Depends(get_session),
 ):
     db = session
-    
+
     # 读取Excel文件
     df = pd.read_excel(file.file)
-    
+
     # 确保id列存在
-    if 'id' not in df.columns:
+    if "id" not in df.columns:
         raise HTTPException(status_code=400, detail="Excel文件必须包含id列")
-        
+
     # 获取所有列名,排除id列
-    update_fields = [col for col in df.columns if col != 'id']
-    
+    update_fields = [col for col in df.columns if col != "id"]
+
     # 遍历每一行数据进行更新
     updated_count = 0
     for _, row in df.iterrows():
@@ -208,7 +225,7 @@ def update_batch(
 
                 if field.startswith("加征"):
                     field = "加征." + field
-                
+
                 # 检查是否为日期类型
                 if isinstance(value, pd.Timestamp):
                     update_data[field] = value.strftime("%Y-%m-%d")
@@ -219,25 +236,26 @@ def update_batch(
             if transport_type == "空运":
                 # 执行更新
                 result = db.products.update_one(
-                    {"_id": ObjectId(row['id'])},
-                    {"$set": update_data}
+                    {"_id": ObjectId(row["id"])}, {"$set": update_data}
                 )
             elif transport_type == "海运":
                 result = db.products_sea.update_one(
-                    {"_id": ObjectId(row['id'])},
-                    {"$set": update_data}
+                    {"_id": ObjectId(row["id"])}, {"$set": update_data}
                 )
             if result.modified_count:
                 updated_count += 1
-                
+
         except Exception:
             logger.error(f"更新ID {row['id']} 失败: {traceback.format_exc()}")
             continue
-            
+
     return {"message": f"成功更新 {updated_count} 条记录"}
 
 
-@air_product_router.delete("/{product_id}", summary="删除产品")
+@air_product_router.delete(
+    "/{product_id}",
+    summary="删除产品",
+)
 def delete_product(product_id: str, session: MongoClient = Depends(get_session)):
     db = session
     product = db.products.find_one({"_id": ObjectId(product_id)})
@@ -249,19 +267,28 @@ def delete_product(product_id: str, session: MongoClient = Depends(get_session))
     return product
 
 
-@air_product_router.get("/output_products", summary="导出产品Excel")
+@air_product_router.get(
+    "/output_products",
+    summary="导出产品Excel",
+)
 def output_products(
     session: MongoClient = Depends(get_session),
     transport_type: str = "",
-    startland:str = "China",
+    startland: str = "China",
     destination: str = "America",
 ):
     try:
         db = session
         if transport_type == "sea":
-            products = list(db.products_sea.find({"destination": destination,"startland":startland}))
+            products = list(
+                db.products_sea.find(
+                    {"destination": destination, "startland": startland}
+                )
+            )
         else:
-            products = list(db.products.find({"destination": destination,"startland":startland}))
+            products = list(
+                db.products.find({"destination": destination, "startland": startland})
+            )
 
         output_products = []
         all_jia_zheng_keys = set()

@@ -32,10 +32,14 @@ def satisfies(attrs_json: str, env: dict) -> bool:
     约束之间 AND 关系；未出现的键视为“不满足”除非策略为 "*"
     """
     try:
-        attrs = json.loads(attrs_json) if attrs_json else {}
+        attrs = json.loads(attrs_json)[0] if attrs_json else {}
+
     except Exception:
         return False
-
+    #环境变量是空的也不限制
+  
+    if not env:
+        return True
     # 空对象：不限制
     if not attrs:
         return True

@@ -91,8 +91,10 @@ def get_categories(
     """获取指定路线的所有产品类别"""
     db = session
 
-    query = {"destination": destination, "startland": startland}
-
+    query = {
+        "destination": {"$regex": f"^{destination}$", "$options": "i"},
+        "startland": {"$regex": f"^{startland}$", "$options": "i"}
+    }
     # 使用 distinct 获取所有不同的类别值
     categories = db.products.distinct("类别", query)
 

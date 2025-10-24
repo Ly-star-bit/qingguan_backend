@@ -390,32 +390,7 @@ async def get_tariff_by_country(
     return results
 
 
-@tariff_router.get(
-    "/categories/list",
-    summary="获取所有产品大类",
-    response_model=List[str]
-)
-async def get_all_categories(session=Depends(get_session)):
-    """获取系统中所有的产品大类"""
-    db = session
-    
-    # 使用 $unwind 展开category数组，然后获取distinct值
-    pipeline = [
-        {"$unwind": "$category"},
-        {"$group": {"_id": "$category"}},
-        {"$sort": {"_id": 1}}
-    ]
-    
-    results = list(db.tariffs.aggregate(pipeline))
-    categories = [item["_id"] for item in results]
-    
-    if not categories:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="暂无产品大类数据"
-        )
-    
-    return sorted(categories)
+
 
 
 @tariff_router.get(

@@ -47,6 +47,8 @@ from minio.error import S3Error
 import PyPDF2
 import re
 import json
+
+
 load_dotenv()
 
 
@@ -1876,5 +1878,4 @@ class MinioClient:
         except S3Error as e:
             logger.error(f"下载文件 '{object_name}' 失败: {e}")
             return None
-
 

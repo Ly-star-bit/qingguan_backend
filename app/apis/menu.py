@@ -377,3 +377,5 @@ def _build_pruned_menu_tree(db, allowed_ids: set[str]) -> List[MenuItem]:
         if b is not None:
             out.append(b)
     return out
+
+

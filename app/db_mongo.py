@@ -6,6 +6,8 @@ from pymongo import MongoClient
 from contextlib import contextmanager
 from casbin_pymongo_adapter import Adapter
 
+from app.casbin_new_func import CasbinPolicyFilter
+
 # 加载环境变量
 load_dotenv()
 def norm_key(k): return k.strip()
@@ -93,6 +95,7 @@ MONGO_CONFIG = {
     'database': os.getenv("MONGO_DB")
 }
 uri=f"mongodb://{MONGO_CONFIG['username']}:{MONGO_CONFIG['password']}@{MONGO_CONFIG['host']}:{MONGO_CONFIG['port']}"
+filter_service = CasbinPolicyFilter(mongo_uri=uri,database_name=MONGO_CONFIG['database'])
 
 # 创建 MongoDB 客户端
 client = MongoClient(

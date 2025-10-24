@@ -103,10 +103,12 @@ ports_router = APIRouter(tags=['港口'],prefix="/ports")
 def create_port(port: Dict[str, Any], session: MongoClient = Depends(get_session)):
     db = session  # 假设这里已经是 Database 对象
     # 先把请求体里的潜在 ObjectId 等可序列化处理好，并去掉 id/_id
+    print(port)
     doc = jsonable_encoder(
         port,
         custom_encoder={ObjectId: str}
     )
+    print(doc)
     doc.pop("id", None)
     doc.pop("_id", None)
 

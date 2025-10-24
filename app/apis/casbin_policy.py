@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
-from typing import List, Optional, Dict
-from app.db_mongo import get_session, enforcer  # 确保已注册 satisfies 函数
+from typing import Any, List, Optional, Dict
+from app.db_mongo import get_session, enforcer,filter_service  # 确保已注册 satisfies 函数
 
 from app.schemas import Policy, UpdatePolicy, Group, GroupWithPolicies
 import json
+
+from app.casbin_new_func import  FilterCondition
 
 def dump_attrs(attrs: dict | None) -> str:
     if not attrs:
@@ -266,4 +268,29 @@ async def update_group(group_with_policies: GroupWithPolicies):
 async def get_groups():
     return enforcer.get_all_roles()
 
-
+@policy_router.post("/api/policies/filter")
+async def filter_policies_post(
+    filters: List[Dict[str, Any]],
+    skip: int = 0,
+    limit: int = 100
+):
+    """
+    POST /api/policies/filter
+    Body:
+    {
+        "filters": [
+            {"field": "v0", "value": "user123", "operator": "eq"},
+            {"field": "v1", "value": "api", "operator": "contains"},
+            {"field": "v3", "value": "read", "operator": "contains"}
+        ],
+        "skip": 0,
+        "limit": 10
+    }
+    """
+    conditions = [FilterCondition(**f) for f in filters]
+    
+    return filter_service.filter_policies_advanced(
+        conditions=conditions,
+        skip=skip,
+        limit=limit
+    )

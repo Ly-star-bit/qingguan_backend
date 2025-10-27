@@ -1,5 +1,6 @@
 import base64
 import binascii
+from fnmatch import fnmatch
 import traceback
 from loguru import logger
 from starlette.authentication import AuthenticationBackend, AuthenticationError, SimpleUser, AuthCredentials
@@ -20,6 +21,7 @@ from app.api_keys.apis.api_keys import validate_api_key
 from app.db_mongo import get_session, enforcer
 
 load_dotenv()
+
 
 class BasicAuth(AuthenticationBackend):
     async def authenticate(self, request):
@@ -50,19 +52,25 @@ class ForwardedPrefixMiddleware(BaseHTTPMiddleware):
 # JWT 配置
 ACCESS_TOKEN_SECRET_KEY = os.getenv("ACCESS_TOKEN_SECRET_KEY")
 ACCESS_TOKEN_ALGORITHM = os.getenv("ACCESS_TOKEN_ALGORITHM")
+def is_excluded(path: str) -> bool:
+    """检查路径是否被排除"""
+    for excluded in EXCLUDED_PATHS:
+        if fnmatch(path, excluded):
+            return True
+    return False
 EXCLUDED_PATHS = {
-    "/login",
-    "/docs",
-    "/openapi.json",
-    "/redoc",
+    "/login/",
+    "/docs*",           # 匹配 /docs, /docs/, /docsomething
+    "/openapi.json*",
+    "/redoc/",
     "/qingguan/ip_white_list/",
-    "/excel-preview",
-    "/luckysheet-preview",
-    "/upload-excel-luckysheet",
-    "/process_excel_usp_data",
-    "/refresh",
-    "/17track/notify",
-    '/menu/user/get_user_menu_permissions'
+    "/excel-preview/",
+    "/luckysheet-preview/",
+    "/upload-excel-luckysheet/",
+    "/process_excel_usp_data/",
+    "/refresh/",
+    "/17track/notify/",
+    "/menu/user/get_user_menu_permissions/",
 }
 
 # 前缀排除（用于 /static/xxx, /tiles/xxx 等）
@@ -72,13 +80,10 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
         # 定义不需要验证的路径
         path = request.url.path
         method = request.method
-
+        if len(path) > 1 and not path.endswith('/'):
+                path = path + '/'
         logger.info(f"request.url.path: {path}")        # 1. 完全匹配的路径（无需鉴权）
-        if path in EXCLUDED_PATHS:
-            return await call_next(request)
-
-        # 2. 特殊规则：GET /menu 免鉴权
-        if method == "GET" and path == "/menu":
+        if is_excluded(path):
             return await call_next(request)
 
         # 3. 前缀匹配的路径（如 /static/...）
@@ -124,8 +129,11 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
             request.state.user = payload 
 
             subject = payload.get("sub")
-            object = request.url.path
+            obj = path
             action = request.method
+            # if len(obj) > 1 and not obj.endswith('/'):
+            #     obj = obj + '/'
+            logger.info(f"{subject}-{obj}-{action}")
             # startland = request.query_params.get("startland")
             # destination = request.query_params.get("destination")
             # env = dict()
@@ -145,7 +153,8 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
                         content={"detail": "系统已封禁"}
                     )
                 
-                if not enforcer.enforce(subject, object, action,{}):
+                if not enforcer.enforce(subject, obj, action,{}):
+                    logger.info("木有权限")
                     return JSONResponse(
                         status_code=status.HTTP_403_FORBIDDEN,
                         content={"detail": "没有权限"}

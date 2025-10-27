@@ -29,7 +29,7 @@ from app.middleware import (
     AccessTokenAuthMiddleware,
     AuthenticationMiddleware,
     BasicAuth,
-    ForwardedPrefixMiddleware
+    ForwardedPrefixMiddleware,
 )
 from app.price_card.apis.price_card import price_card_router
 from app.qingguan.apis.web_vba_mongo import IPWhitelistMiddleware, web_vba_router
@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
 
 
 # 定义FastAPI应用
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan,redirect_slashes=True)
 app.include_router(user_router)
 app.include_router(role_router)
 
@@ -180,10 +180,10 @@ origins = [
 # app.add_middleware(CasbinMiddleware, enforcer=enforcer)
 
 # app.add_middleware(AuthenticationMiddleware, backend=BasicAuth())
-app.add_middleware(ForwardedPrefixMiddleware)
-
-app.add_middleware(IPWhitelistMiddleware)
+# app.add_middleware(IPWhitelistMiddleware)
 app.add_middleware(AccessTokenAuthMiddleware)
+# app.add_middleware(SlashMiddleware)
+app.add_middleware(ForwardedPrefixMiddleware)
 
 
 app.add_middleware(

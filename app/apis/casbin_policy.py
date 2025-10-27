@@ -1,5 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from typing import Any, List, Optional, Dict
+
+from loguru import logger
+from pydantic import BaseModel, Field
 from app.db_mongo import get_session, enforcer,filter_service  # 确保已注册 satisfies 函数
 
 from app.schemas import Policy, UpdatePolicy, Group, GroupWithPolicies
@@ -104,7 +107,10 @@ async def get_policies(policy_type: Optional[str] = Query(None, description="p �
 @policy_router.post("/policies")
 async def add_policy(policy: Policy):
     """添加 p 策略（含 attrs JSON）"""
-    rule = [policy.sub, policy.obj, policy.act, dump_attrs(policy.attrs), policy.eft, policy.description or ""]
+    obj = policy.obj
+    if len(obj) > 1 and not obj.endswith('/'):
+                obj = obj + '/'
+    rule = [policy.sub, obj, policy.act, dump_attrs(policy.attrs), policy.eft, policy.description or ""]
     print(rule)
     success = enforcer.add_named_policy(policy.ptype, rule)
     if not success:
@@ -268,15 +274,23 @@ async def update_group(group_with_policies: GroupWithPolicies):
 async def get_groups():
     return enforcer.get_all_roles()
 
-@policy_router.post("/api/policies/filter")
-async def filter_policies_post(
-    filters: List[Dict[str, Any]],
-    skip: int = 0,
-    limit: int = 100
-):
+
+
+class FilterItem(BaseModel):
+    field: str
+    value: Any
+    operator: str
+
+class FilterPoliciesRequest(BaseModel):
+    filters: List[FilterItem]
+    skip: int = Field(default=0, ge=0)
+    limit: int = Field(default=100, ge=1, le=1000)
+
+@policy_router.post("/policies/filter")
+async def filter_policies_post(request: FilterPoliciesRequest):
     """
-    POST /api/policies/filter
-    Body:
+    POST /policies/filter
+    json:
     {
         "filters": [
             {"field": "v0", "value": "user123", "operator": "eq"},
@@ -287,10 +301,19 @@ async def filter_policies_post(
         "limit": 10
     }
     """
-    conditions = [FilterCondition(**f) for f in filters]
-    
-    return filter_service.filter_policies_advanced(
-        conditions=conditions,
-        skip=skip,
-        limit=limit
-    )
+    try:
+        conditions = [FilterCondition(
+            field=f.field,
+            value=f.value,
+            operator=f.operator
+        ) for f in request.filters]
+        
+        return filter_service.filter_policies_advanced(
+            conditions=conditions,
+            skip=request.skip,
+            limit=request.limit,
+            include_inheritance=True
+        )
+    except Exception as e:
+        logger.error(f"Error filtering policies: {e}")
+        return {"error": str(e)}

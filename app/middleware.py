@@ -71,6 +71,7 @@ EXCLUDED_PATHS = {
     "/refresh/",
     "/17track/notify/",
     "/menu/user/get_user_menu_permissions/",
+    '/casbin/policies/filter/',
 }
 
 # 前缀排除（用于 /static/xxx, /tiles/xxx 等）

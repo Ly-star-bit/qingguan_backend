@@ -210,13 +210,14 @@ async def get_user_policies(username: str):
     如果是 admin user 则返回所有的策略
     """
     # 检查是否为 admin 用户
-    is_admin = (username == "admin") or ("admin" in enforcer.get_implicit_roles_for_user(username))
-    if is_admin:
-        policies = enforcer.get_policy()   
-    else:
+    # is_admin = (username == "admin") or ("admin" in enforcer.get_implicit_roles_for_user(username))
+    # if is_admin:
+    #     policies = enforcer.get_policy()   
+    # else:
 
         # Step 1: 获取用户的所有权限(包括通过角色继承的)
-        policies = enforcer.get_implicit_permissions_for_user(username)
+        # policies = enforcer.get_implicit_permissions_for_user(username)
+    policies = enforcer.get_implicit_permissions_for_user(username)
     
     return [{
         "ptype": "p",

@@ -39,7 +39,6 @@ from app.route_17track.apis.route_17track import router_17track
 from app.skudetail.apis.skudetail import skudetail_router
 from app.api_keys.apis.api_keys import api_key_router
 from app.apis.permission_item import permission_item_router
-from app.hubs_new_morelink.apis.hubs_client_router import hubs_router
 from app.utils import create_email_handler, output_custom_clear_history_log
 from email_ip_auto import main as email_ip_auto_main
 from morelink_api import MoreLinkClient
@@ -125,7 +124,6 @@ app.include_router(casbin_policy_router)
 app.include_router(api_key_router)
 app.include_router(fentan_router)
 app.include_router(permission_item_router)
-app.include_router(hubs_router)
 # 挂载静态文件
 mount_static_files(app)
 
@@ -185,7 +183,7 @@ app.add_middleware(AccessTokenAuthMiddleware)
 # app.add_middleware(SlashMiddleware)
 app.add_middleware(ForwardedPrefixMiddleware)
 
-
+#
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

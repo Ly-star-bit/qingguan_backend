@@ -135,7 +135,9 @@ def zongdan_filter_json_data(data_list, orderno=None, billno=None):
 
 def get_with_default(container, key, default):
     value = container.get(key, default)
-    return default if value == 0.0 else value
+    # 如果值是 0.0 或 None，返回 default；否则返回 value
+    return default if (value == 0.0 or value is None) else value
+
 
 
 

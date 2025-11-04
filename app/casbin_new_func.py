@@ -11,136 +11,161 @@ class FilterCondition:
     operator: str = "eq"  # eq, contains, regex, in, gt, lt
 
 class CasbinPolicyFilter:
-    """Casbin MongoDB 多字段过滤器 - 支持角色继承"""
-    
-    def __init__(self, mongo_uri: str, database_name: str):
+    """Casbin MongoDB 多字段过滤器 - 支持角色继承和管理员权限"""
+
+    def __init__(self, mongo_uri: str, database_name: str, admin_role: str = "admin_role"):
         self.client = MongoClient(mongo_uri)
         self.db = self.client[database_name]
         self.collection: Collection = self.db['casbin_rule']
-    
+        self.admin_role = admin_role
+
+    # -----------------------------
+    # 工具方法
+    # -----------------------------
     def build_query(self, conditions: List[FilterCondition]) -> Dict[str, Any]:
         """构建 MongoDB 查询条件"""
-        query = {}
-        
+        query: Dict[str, Any] = {}
+
         for condition in conditions:
             if condition.operator == "eq":
                 query[condition.field] = condition.value
-            
+
             elif condition.operator == "contains":
                 query[condition.field] = {"$regex": condition.value, "$options": "i"}
-            
+
             elif condition.operator == "regex":
                 query[condition.field] = {"$regex": condition.value}
-            
+
             elif condition.operator == "in":
                 query[condition.field] = {"$in": condition.value}
-            
+
             elif condition.operator == "gt":
                 query[condition.field] = {"$gt": condition.value}
-            
+
             elif condition.operator == "lt":
                 query[condition.field] = {"$lt": condition.value}
-        
+
         return query
-    
+
+    def _build_query_excluding(self, conditions: List[FilterCondition], exclude_fields: List[str]) -> Dict[str, Any]:
+        """基于 build_query，但排除某些字段（例如 v0）"""
+        kept = [c for c in conditions if c.field not in exclude_fields]
+        return self.build_query(kept) if kept else {}
+
+    def _collapse_to_unique_v1(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        将文档列表折叠为唯一的 v1 列表，并将 v3 固定为 []（表示“所有属性”）
+        输出形如： [{'v1': <接口>, 'v3': []}, ...]
+        """
+        seen = set()
+        out: List[Dict[str, Any]] = []
+        for d in docs:
+            v1 = d.get('v1')
+            if v1 is not None and v1 not in seen:
+                seen.add(v1)
+                out.append({'v1': v1, 'v3': '[]','v4':'allow'})
+        return out
+
+    # -----------------------------
+    # 基础角色/管理员判断
+    # -----------------------------
+    def is_admin(self, user_id: str) -> bool:
+        """
+        检查用户是否是管理员（是否拥有 admin_role）
+        """
+        admin_role_doc = self.collection.find_one(
+            {'ptype': 'g', 'v0': user_id, 'v1': self.admin_role},
+        )
+        return admin_role_doc is not None
+
     def get_user_roles(self, user_id: str) -> List[str]:
         """
         获取用户的所有角色（包含继承）
-        
-        Args:
-            user_id: 用户ID
-        
-        Returns:
-            角色列表
         """
-        # 查询 g 类型的记录，获取用户的直接角色
-        roles = []
-        
+        roles: List[str] = []
+
         # 第一步：获取用户直接分配的角色
         direct_roles = list(self.collection.find(
             {'ptype': 'g', 'v0': user_id},
             {'v1': 1, '_id': 0}
         ))
-        
         for role_doc in direct_roles:
             role_name = role_doc.get('v1')
-            if role_name not in roles:
+            if role_name and role_name not in roles:
                 roles.append(role_name)
-        
+
         # 第二步：递归获取角色的继承角色（role in role）
         visited = set(roles)
         queue = list(roles)
-        
+
         while queue:
             current_role = queue.pop(0)
-            
-            # 查询这个角色继承的其他角色
             inherited_roles = list(self.collection.find(
                 {'ptype': 'g', 'v0': current_role},
                 {'v1': 1, '_id': 0}
             ))
-            
             for role_doc in inherited_roles:
                 inherited_role = role_doc.get('v1')
-                if inherited_role not in visited:
+                if inherited_role and inherited_role not in visited:
                     roles.append(inherited_role)
                     visited.add(inherited_role)
                     queue.append(inherited_role)
-        
+
         return roles
-    
+
+    # -----------------------------
+    # 过滤（简版）
+    # -----------------------------
     def filter_policies(
-        self, 
+        self,
         conditions: List[FilterCondition],
         p_type: str = "p",
         include_inheritance: bool = False
     ) -> List[Dict[str, Any]]:
         """
         获取符合条件的 policies
-        
-        Args:
-            conditions: 过滤条件列表
-            p_type: policy 类型，通常为 "p" 或 "g"
-            include_inheritance: 是否包含继承的权限（当查询用户权限时有效）
-        
-        Returns:
-            匹配的 policy 列表
+
+        - 管理员(admin_role)：
+          忽略 v0，仅按其余条件过滤 p 记录；
+          最终只返回唯一 v1 的列表，且每项 v3=[]。
+
+        - 非管理员：
+          保持原有行为；当 include_inheritance=True 时，
+          还会合并其角色（含继承）的 p 记录。
         """
         query = self.build_query(conditions)
         query['ptype'] = p_type
-        
+
         results = list(self.collection.find(query, {'_id': 0}))
-        
-        # 如果需要包含继承且查询的是 p 类型，需要处理角色继承
+
+        # 管理员分支：仅在查询 p 且包含继承时启用（与原有结构一致）
         if include_inheritance and p_type == "p" and conditions:
-            # 找到 v0 字段的条件（通常是用户或角色）
             v0_conditions = [c for c in conditions if c.field == 'v0']
-            
             if v0_conditions:
-                v0_value = v0_conditions[0].value
-                
-                # 获取用户的所有角色（包含继承）
-                all_roles = self.get_user_roles(v0_value)
-                
+                user_id = v0_conditions[0].value
+                # 命中管理员：忽略 v0，按其他条件过滤后折叠为唯一 v1，v3=[]
+                if self.is_admin(user_id):
+                    admin_query = self._build_query_excluding(conditions, exclude_fields=['v0'])
+                    admin_query['ptype'] = 'p'
+                    raw = list(self.collection.find(admin_query, {'_id': 0}))
+                    return self._collapse_to_unique_v1(raw)
+
+                # 非管理员：沿用原逻辑（用户角色及继承）
+                all_roles = self.get_user_roles(user_id)
                 if all_roles:
-                    # 为每个角色查询权限
                     for role in all_roles:
-                        # 构建新的查询条件，用角色替换 v0
-                        role_conditions = [
-                            c for c in conditions if c.field != 'v0'
-                        ]
-                        role_conditions.append(
-                            FilterCondition(field='v0', value=role, operator='eq')
-                        )
-                        
+                        role_conditions = [c for c in conditions if c.field != 'v0']
+                        role_conditions.append(FilterCondition(field='v0', value=role, operator='eq'))
                         role_query = self.build_query(role_conditions)
                         role_query['ptype'] = 'p'
-                        
                         role_results = list(self.collection.find(role_query, {'_id': 0}))
                         results.extend(role_results)
-        
+
         return results
-    
+
+    # -----------------------------
+    # 过滤（高级：分页/排序）
+    # -----------------------------
     def filter_policies_advanced(
         self,
         conditions: List[FilterCondition],
@@ -151,119 +176,76 @@ class CasbinPolicyFilter:
         include_inheritance: bool = False
     ) -> Dict[str, Any]:
         """
-        高级过滤接口（支持分页、排序和继承）
-        
-        Args:
-            conditions: 过滤条件列表
-            p_type: policy 类型
-            skip: 跳过数量
-            limit: 限制数量
-            sort_by: 排序字段
-            include_inheritance: 是否包含继承的权限
-        
-        Returns:
-            包含总数和结果的字典
+        高级过滤接口（支持分页、排序、继承和管理员权限）
+
+        - 管理员(admin_role)：
+          忽略 v0，仅按其余条件过滤 p 记录；
+          再将结果折叠为唯一 v1（每项 v3=[]），
+          然后对折叠结果按 v1 排序（如果 sort_by == 'v1'），再分页。
+
+        - 非管理员：
+          保持原有行为；当 include_inheritance=True 时，合并其角色（含继承）的 p 记录；
+          再按 sort_by 排序（原始字段），最后分页。
         """
         query = self.build_query(conditions)
         query['ptype'] = p_type
-        
-        # 获取总数
-        total = self.collection.count_documents(query)
-        
-        # 构建查询
-        cursor = self.collection.find(query, {'_id': 0})
-        
-        if sort_by:
-            cursor = cursor.sort(sort_by, 1)
-        
-        results = list(cursor.skip(skip).limit(limit))
-        
-        # 如果需要包含继承且查询的是 p 类型
+
         if include_inheritance and p_type == "p" and conditions:
             v0_conditions = [c for c in conditions if c.field == 'v0']
-            
             if v0_conditions:
-                v0_value = v0_conditions[0].value
-                all_roles = self.get_user_roles(v0_value)
-                
-                if all_roles:
-                    # 重新计算总数（包含继承的权限）
-                    all_results = []
-                    
-                    for role in all_roles:
-                        role_conditions = [
-                            c for c in conditions if c.field != 'v0'
-                        ]
-                        role_conditions.append(
-                            FilterCondition(field='v0', value=role, operator='eq')
-                        )
-                        
-                        role_query = self.build_query(role_conditions)
-                        role_query['ptype'] = 'p'
-                        
-                        role_results = list(self.collection.find(role_query, {'_id': 0}))
-                        all_results.extend(role_results)
-                    
-                    total = len(all_results)
-                    # 应用分页
-                    results = all_results[skip:skip + limit]
-        
+                user_id = v0_conditions[0].value
+
+                # 管理员：忽略 v0，按其他条件过滤 -> 折叠唯一 v1 -> 排序/分页
+                if self.is_admin(user_id):
+                    admin_query = self._build_query_excluding(conditions, exclude_fields=['v0'])
+                    admin_query['ptype'] = 'p'
+                    raw = list(self.collection.find(admin_query, {'_id': 0}))
+
+                    collapsed = self._collapse_to_unique_v1(raw)
+                    # 仅对 v1 排序有意义
+                    if sort_by == 'v1':
+                        collapsed.sort(key=lambda x: x['v1'])
+
+                    total = len(collapsed)
+                    data = collapsed[skip: skip + limit]
+                    return {
+                        'total': total,
+                        'skip': skip,
+                        'limit': limit,
+                        'data': data
+                    }
+
+                # 非管理员：合并角色权限
+                all_roles = self.get_user_roles(user_id)
+                all_results: List[Dict[str, Any]] = []
+                for role in all_roles:
+                    role_conditions = [c for c in conditions if c.field != 'v0']
+                    role_conditions.append(FilterCondition(field='v0', value=role, operator='eq'))
+                    role_query = self.build_query(role_conditions)
+                    role_query['ptype'] = 'p'
+                    role_results = list(self.collection.find(role_query, {'_id': 0}))
+                    all_results.extend(role_results)
+
+                total = len(all_results)
+                if sort_by:
+                    all_results.sort(key=lambda x: x.get(sort_by, ''))
+                results = all_results[skip:skip + limit]
+                return {
+                    'total': total,
+                    'skip': skip,
+                    'limit': limit,
+                    'data': results
+                }
+
+        # 非继承或非 p 类型：沿用原分页逻辑
+        total = self.collection.count_documents(query)
+        cursor = self.collection.find(query, {'_id': 0})
+        if sort_by:
+            cursor = cursor.sort(sort_by, 1)
+        results = list(cursor.skip(skip).limit(limit))
         return {
             'total': total,
             'skip': skip,
             'limit': limit,
             'data': results
-        }
-    
-    def get_user_policies(
-        self,
-        user_id: str,
-        skip: int = 0,
-        limit: int = 100
-    ) -> Dict[str, Any]:
-        """
-        获取用户的所有权限（包含继承的角色权限）
-        
-        Args:
-            user_id: 用户ID
-            skip: 分页 skip
-            limit: 分页 limit
-        
-        Returns:
-            用户的完整权限信息
-        """
-        # 获取用户的所有角色
-        user_roles = self.get_user_roles(user_id)
-        
-        # 查询用户直接的权限
-        query = {'ptype': 'p', 'v0': user_id}
-        user_direct_policies = list(self.collection.find(query, {'_id': 0}))
-        
-        # 查询用户角色对应的权限
-        all_policies = list(user_direct_policies)
-        
-        if user_roles:
-            role_query = {'ptype': 'p', 'v0': {'$in': user_roles}}
-            role_policies = list(self.collection.find(role_query, {'_id': 0}))
-            all_policies.extend(role_policies)
-        
-        # 去重
-        seen = set()
-        unique_policies = []
-        for policy in all_policies:
-            policy_tuple = tuple(sorted(policy.items()))
-            if policy_tuple not in seen:
-                seen.add(policy_tuple)
-                unique_policies.append(policy)
-        
-        total = len(unique_policies)
-        paginated_policies = unique_policies[skip:skip + limit]
-        
-        return {
-            'user_id': user_id,
-            'roles': user_roles,
-            'total': total,
-            'skip': skip,
-            'limit': limit,
-            'data': paginated_policies
         }

@@ -313,6 +313,8 @@ def process_shipping_data(
     good_type_totals = {}
     for p in results:
         good_type = p.get("good_type", "未知")
+        if isinstance(good_type,list):
+            good_type = good_type[0]
         good_type_totals[good_type] = good_type_totals.get(good_type, 0) + p.get(
             "total_price", 0
         )
@@ -560,6 +562,8 @@ def process_shipping_data_canada(
     good_type_totals = {}
     for p in results:
         good_type = p.get("good_type", "未知")
+        if isinstance(good_type,list):
+            good_type = good_type[0]
         good_type_totals[good_type] = good_type_totals.get(good_type, 0) + p.get(
             "total_price", 0
         )

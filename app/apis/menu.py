@@ -1,6 +1,8 @@
 from collections import defaultdict
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from typing import Dict, List, Optional
+
+from loguru import logger
 from app.db_mongo import get_session, enforcer
 from bson import ObjectId
 from datetime import datetime
@@ -182,24 +184,28 @@ async def get_user_menu_permissions(username: str, session=Depends(get_session))
     uniq = []
     for p in policies:
         k = f'{p[0]}::{p[1]}::{json.dumps(p[2], sort_keys=True, ensure_ascii=False)}'
+  
         if k not in seen:
+          
             seen.add(k)
             uniq.append(p)
     policies = uniq
-
     # --- 2) 批量反查 endpoint（建议建立 {Path:1, Method:1} 联合索引）---
     path_set = {p[0] for p in policies}
+    for i in list(path_set):  # 转换为列表
+        if not i.endswith("/"):
+            path_set.add(f"{i}/")
+    # print(f"path_set:{path_set}")
     eps = list(db.api_endpoints.find(
         {"Path": {"$in": list(path_set)}},
         {"_id": 1, "Path": 1, "Method": 1}
     ))
-
+    # print(f"eps:{eps}")
     # Path::Method → [endpoint_id]
     ep_index: Dict[str, List[ObjectId]] = {}
     for ep in eps:
         k = f'{(ep.get("Path") or "/").rstrip("/") or "/"}::{str(ep.get("Method") or "").upper()}'
         ep_index.setdefault(k, []).append(ep["_id"])
-
     endpoint_ids: set[ObjectId] = set()
     # endpoint_id → 多个 casbin attrs（同一接口可能多条策略）
     policy_map: Dict[str, List[Dict[str, Any]]] = {}
@@ -215,6 +221,7 @@ async def get_user_menu_permissions(username: str, session=Depends(get_session))
     # --- 3) 反查 permissions（code）+ 动态参数子集匹配 ---
     oid_list = list(endpoint_ids)
     str_list = [str(x) for x in oid_list]
+
     candidates = list(db.permissions.find({
         "$or": [
             {"code": {"$in": oid_list}},   # code 为 ObjectId
@@ -237,7 +244,7 @@ async def get_user_menu_permissions(username: str, session=Depends(get_session))
 
     authorized_menu_ids: set[str] = set()
     matched_permissions: List[dict] = []
-
+    # print(f"candidates:{candidates}")
     for perm in candidates:
         code = perm.get("code")
         # 统一用字符串 key 查询 policy_map
@@ -253,12 +260,15 @@ async def get_user_menu_permissions(username: str, session=Depends(get_session))
 
         casbin_attrs_list = policy_map.get(key1, [])
         if not casbin_attrs_list:
+            # logger.info(f"{perm.get('name')} continue")
             continue
 
         perm_dyn = perm.get("dynamic_params") or {}
+        # logger.info(f"casbin_attrs_list:{casbin_attrs_list}")
         # 子集匹配（任一条 casbin 策略覆盖即可）
         ok = any(dyn_subset(perm_dyn, cattrs) for cattrs in casbin_attrs_list)
         if not ok:
+            # logger.info(f"{perm.get('name')} continue")
             continue
 
         # scope 规则（与 casbin attrs 中包含 scope 时对齐；若 casbin 未给 scope，则不强制剔除）
@@ -266,6 +276,7 @@ async def get_user_menu_permissions(username: str, session=Depends(get_session))
         casbin_scopes = {str(ca.get("scope", "")).strip().lower() for ca in casbin_attrs_list if "scope" in ca}
         if casbin_scopes:  # 只有当 casbin 明确给 scope 时，才按 scope 过滤 permission
             if scope_from_perm and scope_from_perm not in casbin_scopes:
+                logger.info(f"{perm.get('name')} continue")
                 continue
 
         matched_permissions.append(perm)
@@ -275,7 +286,7 @@ async def get_user_menu_permissions(username: str, session=Depends(get_session))
 
     if not authorized_menu_ids:
         return []
-
+    # print(f"authorized_menu_ids:{authorized_menu_ids}")
     # --- 4) 祖先补齐 + 只保留授权分支的树 ---
     # 祖先补齐
     def add_parent_menus(menu_id: str, authorized_set: set[str]):

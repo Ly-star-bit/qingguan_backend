@@ -40,6 +40,7 @@ from app.skudetail.apis.skudetail import skudetail_router
 from app.api_keys.apis.api_keys import api_key_router
 from app.apis.permission_item import permission_item_router
 from app.utils import create_email_handler, output_custom_clear_history_log
+from app.utils_aspose import shenzhen_customes_pdf_gennerate
 from email_ip_auto import main as email_ip_auto_main
 from morelink_api import MoreLinkClient
 from morelink_output_excel_client import main as morelink_output_excel_main
@@ -196,66 +197,66 @@ app.add_middleware(
 # 创建一个scheduler实例
 scheduler = AsyncIOScheduler()
 
-# 每分钟执行的定时任务
-# @scheduler.scheduled_job('interval', minutes=1)
-# def cron_job():
-#     session = next(get_session())
-#     db = session
-#     email_queue = list(db.email_queue.find({"status": 0}))
-#     for email_data in email_queue:
-#         try:
-#             send_email(
-#                 receiver_email=email_data["receiver_email"],
-#                 subject=email_data["subject"],
-#                 body=email_data["body"],
-#             )
-#             db.email_queue.update_one(
-#                 {"_id": email_data["_id"]},
-#                 {"$set": {"status": 1}}
-#             )
-#             task_logger.info(f"邮件发送成功->{email_data['subject']}")
-#         except Exception as e:
-#             task_logger.error(f"错误为:{traceback.format_exc()}")
-#             continue
-#     # 获取 ShipmentLog 数据
-#     request_data_list = list(db.shipment_logs.find({"status": 0}))
+#每分钟执行的定时任务
+@scheduler.scheduled_job('interval', minutes=1)
+def cron_job():
+    session = next(get_session())
+    db = session
+    email_queue = list(db.email_queue.find({"status": 0}))
+    for email_data in email_queue:
+        try:
+            send_email(
+                receiver_email=email_data["receiver_email"],
+                subject=email_data["subject"],
+                body=email_data["body"],
+            )
+            db.email_queue.update_one(
+                {"_id": email_data["_id"]},
+                {"$set": {"status": 1}}
+            )
+            task_logger.info(f"邮件发送成功->{email_data['subject']}")
+        except Exception as e:
+            task_logger.error(f"错误为:{traceback.format_exc()}")
+            continue
+    # 获取 ShipmentLog 数据
+    request_data_list = list(db.shipment_logs.find({"status": 0}))
 
-#     if not request_data_list:
-#         task_logger.info("没有需要处理的任务")
-#         return
+    if not request_data_list:
+        task_logger.info("没有需要处理的任务")
+        return
 
-#     node_path = find_playwright_node_path()
-#     morelink_client = MoreLinkClient(node_path)
-#     data = morelink_client.zongdan_api_httpx()
+    node_path = find_playwright_node_path()
+    morelink_client = MoreLinkClient(node_path)
+    data = morelink_client.zongdan_api_httpx()
 
-#     for request_data in request_data_list:
-#         try:
-#             filter_data = [
-#                 row for row in data
-#                 if row.get('billno') == request_data['master_bill_no'].strip()
-#             ]
+    for request_data in request_data_list:
+        try:
+            filter_data = [
+                row for row in data
+                if row.get('billno') == request_data['master_bill_no'].strip()
+            ]
 
-#             if not filter_data:
-#                 task_logger.log("ALERT", f"海运清关提单pdf-总单列表提单号搜索不到：{request_data['master_bill_no']}")
-#                 db.shipment_logs.update_one(
-#                     {"_id": request_data["_id"]},
-#                     {"$set": {"status": -1}}
-#                 )
-#                 continue
+            if not filter_data:
+                task_logger.log("ALERT", f"海运清关提单pdf-总单列表提单号搜索不到：{request_data['master_bill_no']}")
+                db.shipment_logs.update_one(
+                    {"_id": request_data["_id"]},
+                    {"$set": {"status": -1}}
+                )
+                continue
 
-#             pdf_file = shenzhen_customes_pdf_gennerate(request_data, filter_data[0])
-#             task_logger.info(f"已生成pdf文件->{pdf_file}")
-#             send_email(receiver_email=receiver_emial, subject="海运清关提单pdf", body="", attachments=[pdf_file])
+            pdf_file = shenzhen_customes_pdf_gennerate(request_data, filter_data[0])
+            task_logger.info(f"已生成pdf文件->{pdf_file}")
+            send_email(receiver_email=receiver_emial, subject="海运清关提单pdf", body="", attachments=[pdf_file])
 
-#             # 更新 ShipmentLog 的状态
-#             db.shipment_logs.update_one(
-#                 {"_id": request_data["_id"]},
-#                 {"$set": {"status": 1}}
-#             )
+            # 更新 ShipmentLog 的状态
+            db.shipment_logs.update_one(
+                {"_id": request_data["_id"]},
+                {"$set": {"status": 1}}
+            )
 
-#         except Exception as e:
-#             task_logger.error(f"错误为:{traceback.format_exc()}")
-#             continue
+        except Exception as e:
+            task_logger.error(f"错误为:{traceback.format_exc()}")
+            continue
 
 
 # @scheduler.scheduled_job('interval', minutes=5)
@@ -273,81 +274,82 @@ def morelink_get_operNo_cron():
     morelink_get_operNo()
 
 
-@scheduler.scheduled_job("cron", hour="20")
-def send_email_qingguan_history():
-    session = next(get_session())
-    db = session
-    start_time = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    end_time = datetime.now().strftime("%Y-%m-%d")
+# @scheduler.scheduled_job("cron", hour="20")
+# def send_email_qingguan_history():
+#     session = next(get_session())
+#     db = session
+#     start_time = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+#     end_time = datetime.now().strftime("%Y-%m-%d")
 
-    # 获取空运和海运的id_list
-    # 获取空运和海运的id_list
-    air_id_list = [
-        str(doc["_id"])
-        for doc in db.custom_clear_history_summary.find(
-            {
-                "port": {"$ne": ""},
-                "$or": [{"lock": False}, {"lock": {"$exists": False}}],
-                "remarks": {"$ne": "删除"},
-            },
-            {"_id": 1},
-        )
-    ]
-    sea_id_list = [
-        str(doc["_id"])
-        for doc in db.custom_clear_history_summary.find(
-            {
-                "packing_type": {"$ne": ""},
-                "$or": [{"lock": False}, {"lock": {"$exists": False}}],
-                "remarks": {"$ne": "删除"},
-            },
-            {"_id": 1},
-        )
-    ]
-    attachments = []
+#     # 获取空运和海运的id_list
+#     # 获取空运和海运的id_list
+#     air_id_list = [
+#         str(doc["_id"])
+#         for doc in db.custom_clear_history_summary.find(
+#             {
+#                 "port": {"$ne": ""},
+#                 "$or": [{"lock": False}, {"lock": {"$exists": False}}],
+#                 "remarks": {"$ne": "删除"},
+#             },
+#             {"_id": 1},
+#         )
+#     ]
+#     sea_id_list = [
+#         str(doc["_id"])
+#         for doc in db.custom_clear_history_summary.find(
+#             {
+#                 "packing_type": {"$ne": ""},
+#                 "$or": [{"lock": False}, {"lock": {"$exists": False}}],
+#                 "remarks": {"$ne": "删除"},
+#             },
+#             {"_id": 1},
+#         )
+#     ]
+#     attachments = []
 
-    # 生成空运文件
-    if air_id_list:
-        air_file_path = output_custom_clear_history_log(
-            id_list=air_id_list,
-            start_date=start_time,
-            end_date=end_time,
-        )
-        # 获取当前时间并格式化为文件名
-        current_time = datetime.now().strftime("%Y%m%d_%H") + "空"
-        new_air_file_path = os.path.join(
-            os.path.dirname(air_file_path), f"{current_time}.xlsx"
-        )
-        os.rename(air_file_path, new_air_file_path)
-        attachments.append(new_air_file_path)
+#     # 生成空运文件
+#     if air_id_list:
+#         air_file_path = output_custom_clear_history_log(
+#             id_list=air_id_list,
+#             start_date=start_time,
+#             end_date=end_time,
+#         )
+#         # 获取当前时间并格式化为文件名
+#         current_time = datetime.now().strftime("%Y%m%d_%H") + "空"
+#         new_air_file_path = os.path.join(
+#             os.path.dirname(air_file_path), f"{current_time}.xlsx"
+#         )
+#         os.rename(air_file_path, new_air_file_path)
+#         attachments.append(new_air_file_path)
 
-    # 生成海运文件
-    if sea_id_list:
-        sea_file_path = output_custom_clear_history_log(
-            id_list=sea_id_list,
-            start_date=start_time,
-            end_date=end_time,
-        )
-        current_time = datetime.now().strftime("%Y%m%d_%H") + "海"
-        new_sea_file_path = os.path.join(
-            os.path.dirname(sea_file_path), f"{current_time}.xlsx"
-        )
-        os.rename(sea_file_path, new_sea_file_path)
-        attachments.append(new_sea_file_path)
+#     # 生成海运文件
+#     if sea_id_list:
+#         sea_file_path = output_custom_clear_history_log(
+#             id_list=sea_id_list,
+#             start_date=start_time,
+#             end_date=end_time,
+#         )
+#         current_time = datetime.now().strftime("%Y%m%d_%H") + "海"
+#         new_sea_file_path = os.path.join(
+#             os.path.dirname(sea_file_path), f"{current_time}.xlsx"
+#         )
+#         os.rename(sea_file_path, new_sea_file_path)
+#         attachments.append(new_sea_file_path)
 
-    # 只有当有文件时才发送邮件
-    if attachments:
-        send_email(
-            receiver_email="yu.luo@hubs-scs.com",
-            subject="海运和空运清关历史未锁定记录",
-            body="",
-            attachments=attachments,
-        )
+#     # 只有当有文件时才发送邮件
+#     if attachments:
+#         send_email(
+#             receiver_email="yu.luo@hubs-scs.com",
+#             subject="海运和空运清关历史未锁定记录",
+#             body="",
+#             attachments=attachments,
+#         )
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app=app, host="0.0.0.0", port=8085)
+    # uvicorn.run(app=app, host="0.0.0.0", port=8085)
+    cron_job()
     # send_email_qingguan_history()
     #

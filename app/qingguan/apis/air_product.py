@@ -2,7 +2,7 @@ import json
 import os
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +14,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
@@ -119,13 +120,27 @@ def upload_huomian_file(file: UploadFile = File(...)):
 
 @air_product_router.post("/", summary="创建产品")
 def create_product(
+    request: Request,
     product: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     session: MongoClient = Depends(get_session),
 ):
     db = session
     product_data = json.loads(product)
-    product_data["更新时间"] = datetime.utcnow()
+    product_data["更新时间"] = datetime.now(timezone.utc)
+
+    # 获取当前用户信息
+    user_state = getattr(request.state, "user", None)
+    current_user = (user_state or {}).get("sub", "unknown") if isinstance(user_state, dict) else "unknown"
+
+    # 初始化edit_log
+    edit_log = {
+        "操作": "创建",
+        "操作人": current_user,
+        "操作时间": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "修改详情": {k: v for k, v in product_data.items() if k not in ["id", "_id"]}
+    }
+    product_data["edit_log"] = [edit_log]
 
     if file:
         file_name = upload_huomian_file(file)["file_name"]
@@ -154,6 +169,7 @@ def download_pic(pic_name: str):
 
 @air_product_router.put("/{product_id}", summary="更新产品")
 def update_product(
+    request: Request,
     product_id: str,
     product: str = Form(...),
     file: Optional[UploadFile] = File(None),
@@ -181,10 +197,60 @@ def update_product(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid single_weight value")
 
-    update_data["更新时间"] = datetime.utcnow()
+    update_data["更新时间"] = datetime.now(timezone.utc)
+
+    # 获取当前用户信息
+    user_state = getattr(request.state, "user", None)
+    current_user = (user_state or {}).get("sub", "unknown") if isinstance(user_state, dict) else "unknown"
+
+    def format_value(value):
+        """格式化数值，保留合理小数位数"""
+        if isinstance(value, float):
+            # 如果是浮点数，保留6位小数，然后去除末尾的0
+            return float(f"{value:.6f}".rstrip('0').rstrip('.'))
+        return value
+
+    # 记录变更的字段
+    changed_fields = {}
+    for key, new_value in update_data.items():
+        if key == "更新时间":
+            continue  # 跳过系统字段
+        old_value = existing_product.get(key, None)
+
+        # 格式化原值和新值以便比较
+        old_value_formatted = format_value(old_value)
+        new_value_formatted = format_value(new_value)
+
+        # 如果字段值发生变化，记录变更
+        if old_value_formatted != new_value_formatted:
+            changed_fields[key] = {
+                "原值": format_value(old_value),
+                "新值": format_value(new_value)
+            }
+
+    # 如果没有字段变更，直接返回现有产品，不进行更新
+    if not changed_fields:
+        existing_product["id"] = str(existing_product["_id"])
+        existing_product.pop("_id", None)
+        return existing_product
+
+    # 构建编辑日志
+    edit_log_entry = {
+        "操作": "更新",
+        "操作人": current_user,
+        "操作时间": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "修改详情": changed_fields
+    }
 
     try:
-        db.products.update_one({"_id": ObjectId(product_id)}, {"$set": update_data})
+        # 使用$push将新的edit_log追加到数组中
+        db.products.update_one(
+            {"_id": ObjectId(product_id)},
+            {
+                "$set": update_data,
+                "$push": {"edit_log": edit_log_entry}
+            }
+        )
         updated_product = db.products.find_one({"_id": ObjectId(product_id)})
         updated_product["id"] = str(updated_product["_id"])
         updated_product.pop("_id", None)

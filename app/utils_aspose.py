@@ -568,7 +568,7 @@ class AsposeCellsNETHandler:
             # 设置其他相关选项
             saveOption.EmbedStandardWindowsFonts = True
             saveOption.ClearData = False
-            saveOption.Compliance = 0
+            saveOption.Compliance = PdfCompliance.Pdf14
             saveOption.DisplayDocTitle = True
 
             # 设置PDF文件的完整保存路径

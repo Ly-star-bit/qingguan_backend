@@ -1131,7 +1131,7 @@ async def mannual_update_order():
         logger.info("数据库连接成功")
 
         # 获取原始数据
-        raw_data = db.find("select * from tb_fbatracking where (sono='' or customerId=0 or operNo is null) and type = 2", to_json=True)
+        raw_data = db.find("select * from tb_fbatracking where sono='' or customerId=0", to_json=True)
         if not raw_data:
             logger.info("没有需要更新的数据")
             return {
@@ -1178,7 +1178,7 @@ async def mannual_update_order():
                 if customerId:
                     db.update_smart("tb_fbatracking", {"sono": sono, "customerId": customerId,"operNo": operNo}, f"trackingId = '{group_tracking_number}' or fbaShipmentBoxId like '{key}%'")
                     update_count += 1
-                logger.debug(f"处理分组 {key}: {value}")
+                # logger.info(f"处理分组 {key}: {value}")
             except Exception as e:
                 logger.error(f"处理分组{key}时出错: {str(e)}")
                 continue

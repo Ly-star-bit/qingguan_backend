@@ -1,5 +1,6 @@
 import json
-from typing import Any, List, Dict, Optional
+import random
+from typing import Any, Counter, List, Dict, Optional
 
 import pulp as lp
 import httpx
@@ -109,7 +110,7 @@ def optimize_packing_selection(
     products = products_data
     print(f"使用传入的产品数据进行优化，共 {len(products)} 个产品")
     if B_target > 0:
-        avg_weight_per_box = W_target / B_target
+        avg_weight_per_box = round(W_target / B_target,2)
         print(f"计算得出全局平均单箱重量: {avg_weight_per_box:.2f} kg")
         for p in products:
             # 使用 .get() 来安全地访问可能不存在的键
@@ -118,8 +119,8 @@ def optimize_packing_selection(
                 print(
                     f"产品 '{p.get('name', '未知')}' 的重量范围为空或无效, 将使用平均单箱重量。"
                 )
-                p["min_weight_per_box"] = avg_weight_per_box
-                p["max_weight_per_box"] = avg_weight_per_box
+                p["min_weight_per_box"] = 8
+                p["max_weight_per_box"] = 22
     # ======================
     # 数据预处理
     # ======================
@@ -136,7 +137,18 @@ def optimize_packing_selection(
     # **修改点**: 获取重量范围
     min_weights = [p["min_weight_per_box"] for p in products]
     max_weights = [p["max_weight_per_box"] for p in products]
+    # Get count of each weight value
+    weight_counts = Counter(min_weights)
 
+    # Find values that appear more than once
+    duplicates = {value for value, count in weight_counts.items() if count > 1}
+
+    # If a value has duplicates, randomly add 0-5 to it
+    min_weights = [
+        p["min_weight_per_box"] + random.uniform(1, 5) if p["min_weight_per_box"] in duplicates 
+        else p["min_weight_per_box"] 
+        for p in products
+    ]
     value_per_box_usd = [unit_price_usd[i] * pcs_per_box[i] for i in range(n)]
     tax_per_box_usd = [value_per_box_usd[i] * tax_rates[i] for i in range(n)]
     tax_per_box_cny = [t * exchange_rate for t in tax_per_box_usd]

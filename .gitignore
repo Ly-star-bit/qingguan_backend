@@ -110,3 +110,8 @@ hs_err_pid*.log
 *.bak
 *.backup
 *.orig
+
+
+Aspose.PDF for .NET v25.8.0/
+AsposeCells_net/
+JAVA-Aspose.Excel-24.7/

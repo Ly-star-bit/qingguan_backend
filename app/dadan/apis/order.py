@@ -1027,7 +1027,7 @@ async def export_fba_tracking(
             data = []
             for item in response_data["data"]["data"]:
                 if item['customerName'] == "ALGJ-傲雷国际-SZ":
-                    tracking_id = item["fullTrackingId"]
+                    tracking_id = item["fullTrackingId"] if item["fullTrackingId"] else item["trackingId"]
                 else:
                     tracking_id = item["trackingId"]
                 data.append({

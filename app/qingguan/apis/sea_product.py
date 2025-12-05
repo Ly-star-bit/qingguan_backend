@@ -49,12 +49,12 @@ def read_products_sea(
             query["自税"] = {"$in": [1, True]}
         else:
             query["自税"] = {"$in": [0, False]}
-    total = db.products_sea.count_documents(query)
+    total = db.products_sea_new.count_documents(query)
 
     if get_all:
-        products = list(db.products_sea.find(query))
+        products = list(db.products_sea_new.find(query))
     else:
-        products = list(db.products_sea.find(query).skip(skip).limit(limit))
+        products = list(db.products_sea_new.find(query).skip(skip).limit(limit))
 
     for product in products:
         product["id"] = str(product["_id"])
@@ -106,7 +106,7 @@ def create_product_sea(
     if product_data.get("single_weight"):
         product_data["single_weight"] = float(product_data["single_weight"])
 
-    result = db.products_sea.insert_one(product_data)
+    result = db.products_sea_new.insert_one(product_data)
     product_data["id"] = str(result.inserted_id)
     product_data.pop("_id", None)
     return product_data
@@ -136,7 +136,7 @@ def update_product_sea(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid JSON format")
 
-    existing_product = db.products_sea.find_one({"_id": ObjectId(product_id)})
+    existing_product = db.products_sea_new.find_one({"_id": ObjectId(product_id)})
     if not existing_product:
         raise HTTPException(status_code=404, detail="Product not found")
 
@@ -199,14 +199,14 @@ def update_product_sea(
 
     try:
         # 使用$push将新的edit_log追加到数组中
-        db.products_sea.update_one(
+        db.products_sea_new.update_one(
             {"_id": ObjectId(product_id)},
             {
                 "$set": update_data,
                 "$push": {"edit_log": edit_log_entry}
             }
         )
-        updated_product = db.products_sea.find_one({"_id": ObjectId(product_id)})
+        updated_product = db.products_sea_new.find_one({"_id": ObjectId(product_id)})
         updated_product["id"] = str(updated_product["_id"])
         updated_product.pop("_id", None)
         return updated_product
@@ -234,7 +234,7 @@ def bulk_hide_products(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid product ID format")
 
-    db.products_sea.update_many(
+    db.products_sea_new.update_many(
         {"_id": {"$in": object_ids}}, {"$set": {"is_hidden": is_hidden}}
     )
     return {"message": "Products hidden successfully"}
@@ -243,10 +243,10 @@ def bulk_hide_products(
 @sea_product_router.delete("/{product_id}", summary="删除海运产品")
 def delete_product_sea(product_id: str, session: MongoClient = Depends(get_session)):
     db = session
-    product = db.products_sea.find_one({"_id": ObjectId(product_id)})
+    product = db.products_sea_new.find_one({"_id": ObjectId(product_id)})
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    db.products_sea.delete_one({"_id": ObjectId(product_id)})
+    db.products_sea_new.delete_one({"_id": ObjectId(product_id)})
     product["id"] = str(product["_id"])
     product.pop("_id", None)
     return product

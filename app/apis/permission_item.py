@@ -207,6 +207,7 @@ async def get_user_permissions(username: str, session = Depends(get_session)):
 
     # 解析策略并提取path、method和attrs_json
     policies = []
+    # print(f'raw:{raw}')
     for row in raw:
         # row格式: [sub, path, method, attrs_json, eft, desc]
         if len(row) < 5:
@@ -320,7 +321,7 @@ async def get_user_permissions(username: str, session = Depends(get_session)):
             "dynamic_params": permission.get("dynamic_params")
         }
         permissions_list.append(PermissionItem(**permission_dict))
-
+    # print(f"permission:{permissions_list}")
     return permissions_list
 
 

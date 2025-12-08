@@ -3774,12 +3774,20 @@ class PackingOptimizationRequest(BaseModel):
     k: int = 3
     min_boxes_per_product: int = 20
     expansion_factor:Optional[float] = None
+    startland:str
+    destination:str
+    transport_type: str  # "air" 或 "sea"
 @web_vba_router.post("/packing_selection_optimize", summary="最优箱数调整")
 def packing_selection_optimize(upload_data: PackingOptimizationRequest):
     # 如果products_data为空，则从API获取
     if not upload_data.products_data:
         token = get_qingguan_access_token()
-        products_data = fetch_products_from_api(api_token=token)
+        products_data = fetch_products_from_api(
+            api_token=token,
+            startland=upload_data.startland,
+            destination=upload_data.destination,
+            transport_type=upload_data.transport_type
+        )
     else:
         products_data = upload_data.products_data
     

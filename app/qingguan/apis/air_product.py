@@ -65,12 +65,12 @@ def read_products(
         # query["中文品名"] = {"$regex": 名称}
         query["中文品名"] = 名称
 
-    total = db.products_new.count_documents(query)
+    total = db.products.count_documents(query)
 
     if get_all:
-        products = list(db.products_new.find(query))
+        products = list(db.products.find(query))
     else:
-        products = list(db.products_new.find(query).skip(skip).limit(limit))
+        products = list(db.products.find(query).skip(skip).limit(limit))
 
     for product in products:
         product["id"] = str(product["_id"])
@@ -97,7 +97,7 @@ def get_categories(
         "startland": {"$regex": f"^{startland}$", "$options": "i"}
     }
     # 使用 distinct 获取所有不同的类别值
-    categories = db.products_new.distinct("类别", query)
+    categories = db.products.distinct("类别", query)
 
     return {
         "categories": sorted(categories) if categories else [],
@@ -148,7 +148,7 @@ def create_product(
     if product_data.get("single_weight"):
         product_data["single_weight"] = float(product_data["single_weight"])
 
-    result = db.products_new.insert_one(product_data)
+    result = db.products.insert_one(product_data)
     product_data["id"] = str(result.inserted_id)
     product_data.pop("_id", None)
     return product_data
@@ -181,7 +181,7 @@ def update_product(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid JSON format")
 
-    existing_product = db.products_new.find_one({"_id": ObjectId(product_id)})
+    existing_product = db.products.find_one({"_id": ObjectId(product_id)})
     if not existing_product:
         raise HTTPException(status_code=404, detail="Product not found")
 
@@ -244,14 +244,14 @@ def update_product(
 
     try:
         # 使用$push将新的edit_log追加到数组中
-        db.products_new.update_one(
+        db.products.update_one(
             {"_id": ObjectId(product_id)},
             {
                 "$set": update_data,
                 "$push": {"edit_log": edit_log_entry}
             }
         )
-        updated_product = db.products_new.find_one({"_id": ObjectId(product_id)})
+        updated_product = db.products.find_one({"_id": ObjectId(product_id)})
         updated_product["id"] = str(updated_product["_id"])
         updated_product.pop("_id", None)
         return updated_product
@@ -303,11 +303,11 @@ def update_batch(
             logger.info(f"更新ID: {row['id']}")
             if transport_type == "空运":
                 # 执行更新
-                result = db.products_new.update_one(
+                result = db.products.update_one(
                     {"_id": ObjectId(row["id"])}, {"$set": update_data}
                 )
             elif transport_type == "海运":
-                result = db.products_new_sea.update_one(
+                result = db.products_sea.update_one(
                     {"_id": ObjectId(row["id"])}, {"$set": update_data}
                 )
             if result.modified_count:
@@ -326,10 +326,10 @@ def update_batch(
 )
 def delete_product(product_id: str, session: MongoClient = Depends(get_session)):
     db = session
-    product = db.products_new.find_one({"_id": ObjectId(product_id)})
+    product = db.products.find_one({"_id": ObjectId(product_id)})
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    db.products_new.delete_one({"_id": ObjectId(product_id)})
+    db.products.delete_one({"_id": ObjectId(product_id)})
     product["id"] = str(product["_id"])
     product.pop("_id", None)
     return product
@@ -349,13 +349,13 @@ def output_products(
         db = session
         if transport_type == "sea":
             products = list(
-                db.products_new_sea.find(
+                db.products_sea.find(
                     {"destination": destination, "startland": startland}
                 )
             )
         else:
             products = list(
-                db.products_new.find({"destination": destination, "startland": startland})
+                db.products.find({"destination": destination, "startland": startland})
             )
 
         output_products = []

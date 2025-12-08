@@ -5,8 +5,8 @@ from typing import Any, Counter, List, Dict, Optional
 import pulp as lp
 import httpx
 
-# API配置 (保持不变)
-API_URL = "http://47.103.138.130:8085/products/?get_all=true&username=admin&zishui=false&is_hidden=false"
+# API配置模板 (包含起始地、目的地和运输类型参数)
+API_URL_TEMPLATE = "http://47.103.138.130:8085/qingguan/{transport_endpoint}?get_all=true&username=admin&zishui=false&is_hidden=false&startland={startland}&destination={destination}"
 API_TOKEN = ""  # 请手动填入你的token
 
 
@@ -22,16 +22,28 @@ def get_qingguan_access_token():
 
 
 def fetch_products_from_api(
-    api_url: str = API_URL, api_token: str = API_TOKEN
+    api_url: str = None, api_token: str = API_TOKEN, startland: str = "China", destination: str = "America", transport_type: str = "air"
 ) -> Optional[List[Dict]]:
-    """从API获取产品数据 (保持不变)"""
+    """从API获取产品数据 (包含起始地和目的地参数)"""
     try:
+        # 如果没有提供 api_url，则根据运输类型构建URL
+        if api_url is None:
+            # 根据运输类型选择端点
+            endpoint = "products" if transport_type.lower() == "air" else "products_sea"
+            api_url = API_URL_TEMPLATE.format(
+                transport_endpoint=endpoint,
+                startland=startland,
+                destination=destination
+            )
+
         headers = {
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
         }
 
-        with httpx.Client() as client:
+        print(f"🔗 正在从API获取产品数据，运输类型: {transport_type}, 起始地: {startland}, 目的地: {destination}")
+
+        with httpx.Client(follow_redirects=True) as client:
             response = client.get(api_url, headers=headers)
             response.raise_for_status()
 
@@ -108,6 +120,18 @@ def optimize_packing_selection(
         alpha = alpha * expansion_factor
         beta_cny = beta_cny * expansion_factor
     products = products_data
+
+    # 检查产品数据是否为空
+    if not products or len(products) == 0:
+        print("❌ 错误：产品数据为空，无法进行优化")
+        return {
+            "status": "Failed",
+            "success": False,
+            "error": "产品数据为空",
+            "selected_products": [],
+            "summary": {}
+        }
+
     print(f"使用传入的产品数据进行优化，共 {len(products)} 个产品")
     if B_target > 0:
         avg_weight_per_box = round(W_target / B_target,2)

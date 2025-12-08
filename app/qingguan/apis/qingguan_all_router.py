@@ -606,15 +606,32 @@ class PackingOptimizationRequest(BaseModel):
     k: int = 3
     min_boxes_per_product: int = 20
     expansion_factor:Optional[float] = None
+    startland:str
+    destination:str
+    transport_type: str  # "air" 或 "sea"
 @qingguan_router.post("/packing_selection_optimize", summary="最优箱数调整")
 def packing_selection_optimize(upload_data: PackingOptimizationRequest):
     # 如果products_data为空，则从API获取
     if not upload_data.products_data:
         token = get_qingguan_access_token()
-        products_data = fetch_products_from_api(api_token=token)
+        products_data = fetch_products_from_api(
+            api_token=token,
+            startland=upload_data.startland,
+            destination=upload_data.destination,
+            transport_type=upload_data.transport_type
+        )
+        # 检查API返回的数据
+        if not products_data:
+            return {
+                "status": "Failed",
+                "success": False,
+                "error": "无法从API获取产品数据",
+                "selected_products": [],
+                "summary": {}
+            }
     else:
         products_data = upload_data.products_data
-    
+
     # 调用优化函数，传入所有参数
     result = optimize_packing_selection(
         products_data=products_data,
@@ -628,7 +645,7 @@ def packing_selection_optimize(upload_data: PackingOptimizationRequest):
         expansion_factor=upload_data.expansion_factor
 
     )
-    
+
     return result
 @qingguan_router.post("/process-shipping-data", summary="处理清关数据并生成文件")
 async def process_shipping_data_endpoint(

@@ -11,6 +11,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     UploadFile
 )
 from fastapi.responses import FileResponse, StreamingResponse
@@ -19,6 +20,7 @@ from app.utils import (
     extract_zip_codes_from_excel,
     get_ups_zip_data,
     fedex_process_excel_with_zip_codes,
+    query_usps_zip,
     ups_process_excel_with_zip_codes,
 )
 
@@ -569,3 +571,31 @@ async def all_remoteaddresscheck_process(zip_code_str: str = Form(...)):
                 item["property_chinese"] = "未知偏远"  # 默认值
     return combined_result
 
+@express_delivery_router.post("/get_city_by_zip")
+async def get_city_by_zip(request: Request):
+    """根据邮编获取城市信息"""
+    data = await request.json()
+    zip_code = data.get("zip_code")
+    
+    if not zip_code:
+        raise HTTPException(status_code=400, detail="邮编不能为空")
+        
+    usps_info = query_usps_zip(zip_code)
+    
+    if not usps_info:
+        raise HTTPException(status_code=404, detail="未找到城市信息")
+    usa_state_chinese = pd.read_excel(os.path.join(os.getcwd(), 'file', 'remoteaddresscheck', '美国州名.xlsx'))
+
+    item = {}
+    if usps_info and usps_info.get('resultStatus') == 'SUCCESS':
+                item['city'] = usps_info.get('defaultCity', '')
+                item['state'] = usps_info.get('defaultState', '')
+                if item['state'] in usa_state_chinese['美国州名缩写'].values:
+                    # 找到对应的 列 ‘中文译名’
+                    item['state'] += f'\n{usa_state_chinese[usa_state_chinese["美国州名缩写"] == item["state"]]["中文译名"].values[0]}'
+
+                # 获取避免使用的城市名称列表
+                avoid_cities = [x['city'] for x in usps_info.get('nonAcceptList', [])]
+                item['avoid_city'] = avoid_cities
+
+    return item

@@ -273,21 +273,76 @@ async def process_excel_usp_data(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"处理文件时出错: {str(e)}")
 
 
-@express_delivery_router.get("/get_ups_excel_template", summary="获取UPS报价模板Excel")
+@express_delivery_router.get(
+    "/get_ups_lax_htt_excel_template",
+    summary="获取UPS报价模板Excel",
+    response_class=FileResponse,
+)
 def get_ups_excel_template():
+    template_dir = os.path.join(os.getcwd(), "file/excel_template")
     excel_path = next(
         (
-            os.path.join(os.getcwd(), "excel_template", f)
-            for f in os.listdir(os.path.join(os.getcwd(), "excel_template"))
+            os.path.join(template_dir, f)
+            for f in os.listdir(template_dir)
             if f.startswith("LAX发出-HTT")
         ),
         None,
     )
+    print(excel_path)
     if not excel_path:
         raise HTTPException(
             status_code=404, detail="未找到LAX发出-HTT开头的Excel模板文件"
         )
     return FileResponse(excel_path)
+
+
+@express_delivery_router.post("/replace_ups_excel_template", summary="替换UPS报价模板Excel")
+async def replace_ups_excel_template(file: UploadFile = File(...)):
+    """
+    上传新的LAX发出-HTT模板文件，替换原有模板。
+    原模板会被移动到 excel_template/old_htt 目录，并在文件名后添加日期。
+    """
+    template_dir = os.path.join(os.getcwd(), "file/excel_template")
+
+    # 获取文件扩展名，强制重命名为LAX发出-HTT开头
+    _, ext = os.path.splitext(file.filename)
+    new_filename = f"LAX发出-HTT-{datetime.now().strftime('%Y%m%d')}{ext}"
+    old_htt_dir = os.path.join(template_dir, "old_htt")
+
+    # 确保old_htt目录存在
+    if not os.path.exists(old_htt_dir):
+        os.makedirs(old_htt_dir)
+
+    # 查找现有的模板文件
+    old_file_path = next(
+        (
+            os.path.join(template_dir, f)
+            for f in os.listdir(template_dir)
+            if f.startswith("LAX发出-HTT") and os.path.isfile(os.path.join(template_dir, f))
+        ),
+        None,
+    )
+
+    # 如果存在旧文件，移动到old_htt目录并添加日期
+    if old_file_path:
+        old_filename = os.path.basename(old_file_path)
+        name, ext = os.path.splitext(old_filename)
+        date_suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+        new_old_filename = f"{name}_{date_suffix}{ext}"
+        new_old_path = os.path.join(old_htt_dir, new_old_filename)
+        os.rename(old_file_path, new_old_path)
+
+    # 保存新上传的文件
+    new_file_path = os.path.join(template_dir, new_filename)
+    contents = await file.read()
+    with open(new_file_path, "wb") as f:
+        f.write(contents)
+
+    return {
+        "message": "模板替换成功",
+        "new_file": new_filename,
+        "old_file_moved_to": new_old_path if old_file_path else None,
+    }
 
 
 @express_delivery_router.post("/fedex_remoteaddresscheck", summary="联邦快递偏远地址校验Excel处理")

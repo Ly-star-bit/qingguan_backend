@@ -349,7 +349,7 @@ def morelink_get_operNo_cron():
 if __name__ == "__main__":
     import uvicorn
 
-    # uvicorn.run(app=app, host="0.0.0.0", port=8085)
-    cron_job()
+    uvicorn.run(app=app, host="0.0.0.0", port=8085)
+    # cron_job()
     # send_email_qingguan_history()
     #

@@ -54,10 +54,9 @@ logger.level("ALERT", no=35, color="<red>")
 task_logger = logger.bind(task="task")
 task_logger = task_logger.patch(lambda record: record.update(task="task"))
 
+# 配置logger的邮件告警
 logger.add(create_email_handler(receiver_emial), level="ALERT")
-task_logger.add(create_email_handler(receiver_emial), level="ALERT")
-
-# 配置日志文件保存
+# 配置logger的文件保存
 logger.add(
     "log/app.log",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
@@ -67,9 +66,12 @@ logger.add(
     compression="zip",
 )
 
+# 配置task_logger的邮件告警
+task_logger.add(create_email_handler(receiver_emial), level="ALERT")
+# 配置task_logger的文件保存
 task_logger.add(
     "log/task.log",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {task} | {message}",
     level="INFO",
     rotation="10 MB",
     retention="10 days",
@@ -97,12 +99,12 @@ def start_nextjs():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # start_nextjs()
-    # scheduler.start()
+    scheduler.start()
     yield
     # if jpype.isJVMStarted():
     #     jpype.shutdownJVM()
 
-    # scheduler.shutdown()
+    scheduler.shutdown()
 
 
 # 定义FastAPI应用
@@ -353,3 +355,15 @@ if __name__ == "__main__":
     # cron_job()
     # send_email_qingguan_history()
     #
+    # cron_job()
+
+    # node_path = find_playwright_node_path()
+    # morelink_client = MoreLinkClient(node_path)
+    # data = morelink_client.zongdan_api_httpx()
+
+    # filter_data = [
+    #     row for row in data
+    #     if row.get('billno') =="MATS1637457000 ".strip()
+    # ]
+
+          

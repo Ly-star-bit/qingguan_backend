@@ -51,8 +51,10 @@ from fastapi.openapi.utils import get_openapi
 # "yu.luo@hubs-scs.com,op_sea@hubs-scs.com"
 receiver_emial = "op_sea@hubs-scs.com"
 logger.level("ALERT", no=35, color="<red>")
-task_logger = logger.bind(task="task")
-task_logger = task_logger.patch(lambda record: record.update(task="task"))
+
+# 创建独立的task_logger实例
+task_logger = logger.bind(task="task", logger_name="task_logger")
+task_logger = task_logger.patch(lambda record: record.update(task="task", logger_name="task_logger"))
 
 # 配置logger的邮件告警
 logger.add(create_email_handler(receiver_emial), level="ALERT")
@@ -71,7 +73,7 @@ task_logger.add(create_email_handler(receiver_emial), level="ALERT")
 # 配置task_logger的文件保存
 task_logger.add(
     "log/task.log",
-    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {task} | {message}",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level}  | {message}",
     level="INFO",
     rotation="10 MB",
     retention="10 days",
@@ -99,12 +101,12 @@ def start_nextjs():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # start_nextjs()
-    scheduler.start()
+    # scheduler.start()
     yield
     # if jpype.isJVMStarted():
     #     jpype.shutdownJVM()
 
-    scheduler.shutdown()
+    # scheduler.shutdown()
 
 
 # 定义FastAPI应用

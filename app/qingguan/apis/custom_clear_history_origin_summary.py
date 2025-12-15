@@ -22,19 +22,43 @@ custom_clear_history_origin_summary_router = APIRouter(tags=["清关历史数据
 async def read_original_summary(
     context_request: Request,
     type: str = Query(..., description="运输类型:空运|海运"),
+    page: int = Query(1, description="页码，从1开始"),
+    page_size: int = Query(10, description="每页数量"),
     session: MongoClient = Depends(get_session)
 ):
     user = context_request.state.user
     db = session
+
+    # 计算跳过的文档数
+    skip = (page - 1) * page_size
+
+    # 查询总数
+    total = db.custom_clear_history_original_summary.count_documents(
+        {"type": type, "user": user["sub"]}
+    )
+
+    # 分页查询
     summary = list(db.custom_clear_history_original_summary.find(
         {"type": type, "user": user["sub"]}
-    ).sort("created_at", -1))
-    
+    ).sort("created_at", -1).skip(skip).limit(page_size))
+
     # 转换ObjectId为字符串
     for doc in summary:
         doc["_id"] = str(doc["_id"])
-        
-    return summary
+
+    # 计算总页数
+    total_pages = (total + page_size - 1) // page_size
+
+    # 返回分页数据
+    return {
+        "data": summary,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_prev": page > 1
+    }
 
 @custom_clear_history_origin_summary_router.post(
     "/",
@@ -55,7 +79,7 @@ async def create_original_summary(
         "type": type
     })
     
-    if count >= 5:
+    if count >= 50:
         # 找到最早的记录并删除
         oldest_record = db.custom_clear_history_original_summary.find_one(
             {"user": user["sub"], "type": type},

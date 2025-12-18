@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import traceback
@@ -5,6 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from tracemalloc import start
 
+import httpx
 import jpype
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
@@ -39,6 +41,7 @@ from app.route_17track.apis.route_17track import router_17track
 from app.skudetail.apis.skudetail import skudetail_router
 from app.api_keys.apis.api_keys import api_key_router
 from app.apis.permission_item import permission_item_router
+from app.tools_auto.apis.tool_auto_route import tool_auto_router
 from app.utils import create_email_handler, output_custom_clear_history_log
 from app.utils_aspose import shenzhen_customes_pdf_gennerate
 from email_ip_auto import main as email_ip_auto_main
@@ -48,17 +51,26 @@ from morelink_output_excel_client import morelink_get_operNo
 from rpa_tools import find_playwright_node_path
 from rpa_tools.email_tools import send_email
 from fastapi.openapi.utils import get_openapi
+
 # "yu.luo@hubs-scs.com,op_sea@hubs-scs.com"
 receiver_emial = "op_sea@hubs-scs.com"
 logger.level("ALERT", no=35, color="<red>")
 
-# 创建独立的task_logger实例
-task_logger = logger.bind(task="task", logger_name="task_logger")
-task_logger = task_logger.patch(lambda record: record.update(task="task", logger_name="task_logger"))
 
-# 配置logger的邮件告警
-logger.add(create_email_handler(receiver_emial), level="ALERT")
-# 配置logger的文件保存
+# 定义过滤器函数，用于分离不同logger的日志
+def task_filter(record):
+    """只允许task_logger的日志通过"""
+    return record["extra"].get("logger_name") == "task_logger"
+
+
+def app_filter(record):
+    """只允许普通logger的日志通过（排除task_logger）"""
+    return record["extra"].get("logger_name") != "task_logger"
+
+
+# 配置logger的邮件告警（只发送非task的告警）
+logger.add(create_email_handler(receiver_emial), level="ALERT", filter=app_filter)
+# 配置logger的文件保存（只保存非task的日志）
 logger.add(
     "log/app.log",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
@@ -66,11 +78,15 @@ logger.add(
     rotation="10 MB",
     retention="10 days",
     compression="zip",
+    filter=app_filter,
 )
 
-# 配置task_logger的邮件告警
-task_logger.add(create_email_handler(receiver_emial), level="ALERT")
-# 配置task_logger的文件保存
+# 创建独立的task_logger实例（带有特定标记）
+task_logger = logger.bind(logger_name="task_logger")
+
+# 配置task_logger的邮件告警（只发送task的告警）
+task_logger.add(create_email_handler(receiver_emial), level="ALERT", filter=task_filter)
+# 配置task_logger的文件保存（只保存task的日志）
 task_logger.add(
     "log/task.log",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level}  | {message}",
@@ -78,29 +94,12 @@ task_logger.add(
     rotation="10 MB",
     retention="10 days",
     compression="zip",
+    filter=task_filter,
 )
-
-
-def start_nextjs():
-    # 获取当前工作目录
-    cwd = os.getcwd()
-    # 进入到 Next.js 项目的目录
-    logger.info("正在启动服务next")
-
-    if not os.path.isdir(cwd):
-        raise ValueError(f"Next.js directory does not exist: {cwd}")
-    # 启动 Next.js 应用
-    process = subprocess.Popen(
-        ["next", "start", "-H", "0.0.0.0"],
-        cwd=r"D:\react_python\dadan\front",
-        shell=True,
-    )
-    return process
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # start_nextjs()
     # scheduler.start()
     yield
     # if jpype.isJVMStarted():
@@ -110,7 +109,7 @@ async def lifespan(app: FastAPI):
 
 
 # 定义FastAPI应用
-app = FastAPI(lifespan=lifespan,redirect_slashes=True)
+app = FastAPI(lifespan=lifespan, redirect_slashes=True)
 app.include_router(user_router)
 app.include_router(role_router)
 
@@ -129,8 +128,10 @@ app.include_router(casbin_policy_router)
 app.include_router(api_key_router)
 app.include_router(fentan_router)
 app.include_router(permission_item_router)
+app.include_router(tool_auto_router)
 # 挂载静态文件
 mount_static_files(app)
+
 
 def custom_openapi():
     if app.openapi_schema:
@@ -148,25 +149,23 @@ def custom_openapi():
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": "Enter token as: Bearer <your-token>"
+            "description": "Enter token as: Bearer <your-token>",
         },
         "ApiKeyAuth": {
             "type": "apiKey",
             "in": "header",
             "name": "X-API-Key",
-            "description": "Enter your API key"
-        }
+            "description": "Enter your API key",
+        },
     }
 
     # 关键：使用数组表示“或”关系
     # 每个对象代表一种认证方式，满足任意一个即可
-    openapi_schema["security"] = [
-        {"BearerAuth": []},
-        {"ApiKeyAuth": []}
-    ]
+    openapi_schema["security"] = [{"BearerAuth": []}, {"ApiKeyAuth": []}]
 
     app.openapi_schema = openapi_schema
     return openapi_schema
+
 
 app.openapi = custom_openapi
 # 设置CORS
@@ -175,7 +174,7 @@ origins = [
     "http://192.168.20.143:8088",
     "http://localhost:3000",
     "http://192.168.20.87:3000",
-        "http://192.168.20.87:3003",
+    "http://192.168.20.87:3003",
     "http://47.103.138.130:3000",
     "http://47.103.138.130:3001",
     # 你可以在这里添加其他允许的源
@@ -201,8 +200,9 @@ app.add_middleware(
 # 创建一个scheduler实例
 scheduler = AsyncIOScheduler()
 
-#每分钟执行的定时任务
-@scheduler.scheduled_job('interval', minutes=1)
+
+# 每分钟执行的定时任务
+@scheduler.scheduled_job("interval", minutes=1)
 def cron_job():
     session = next(get_session())
     db = session
@@ -215,8 +215,7 @@ def cron_job():
                 body=email_data["body"],
             )
             db.email_queue.update_one(
-                {"_id": email_data["_id"]},
-                {"$set": {"status": 1}}
+                {"_id": email_data["_id"]}, {"$set": {"status": 1}}
             )
             task_logger.info(f"邮件发送成功->{email_data['subject']}")
         except Exception as e:
@@ -228,7 +227,6 @@ def cron_job():
     if not request_data_list:
         task_logger.info("没有需要处理的任务")
         return
-
     node_path = find_playwright_node_path()
     morelink_client = MoreLinkClient(node_path)
     data = morelink_client.zongdan_api_httpx()
@@ -236,26 +234,33 @@ def cron_job():
     for request_data in request_data_list:
         try:
             filter_data = [
-                row for row in data
-                if row.get('billno') == request_data['master_bill_no'].strip()
+                row
+                for row in data
+                if row.get("billno") == request_data["master_bill_no"].strip()
             ]
 
             if not filter_data:
-                task_logger.log("ALERT", f"海运清关提单pdf-总单列表提单号搜索不到：{request_data['master_bill_no']}")
+                task_logger.log(
+                    "ALERT",
+                    f"海运清关提单pdf-总单列表提单号搜索不到：{request_data['master_bill_no']}",
+                )
                 db.shipment_logs.update_one(
-                    {"_id": request_data["_id"]},
-                    {"$set": {"status": -1}}
+                    {"_id": request_data["_id"]}, {"$set": {"status": -1}}
                 )
                 continue
 
             pdf_file = shenzhen_customes_pdf_gennerate(request_data, filter_data[0])
             task_logger.info(f"已生成pdf文件->{pdf_file}")
-            send_email(receiver_email=receiver_emial, subject="海运清关提单pdf", body="", attachments=[pdf_file])
+            send_email(
+                receiver_email=receiver_emial,
+                subject="海运清关提单pdf",
+                body="",
+                attachments=[pdf_file],
+            )
 
             # 更新 ShipmentLog 的状态
             db.shipment_logs.update_one(
-                {"_id": request_data["_id"]},
-                {"$set": {"status": 1}}
+                {"_id": request_data["_id"]}, {"$set": {"status": 1}}
             )
 
         except Exception as e:
@@ -276,6 +281,70 @@ def morelink_output_excel():
 @scheduler.scheduled_job("cron", hour="10")
 def morelink_get_operNo_cron():
     morelink_get_operNo()
+
+
+@scheduler.scheduled_job("interval", days=3)
+def get_latest_usd_cny_rate():
+    """
+    获取最新的USD/CNY汇率
+    """
+    url = "https://wise.com/rates/history+live?source=USD&target=CNY&length=30&resolution=hourly&unit=day"
+
+    try:
+        # 发送GET请求
+        with httpx.Client() as client:
+            response = client.get(url)
+            response.raise_for_status()  # 检查HTTP错误
+
+            # 解析JSON响应
+            data = response.json()
+
+            if not data:
+                print("❌ API返回空数据")
+                return None
+            session = next(get_session())
+            db = session
+            # 按时间戳排序，获取最新的汇率
+            latest_rate = max(data, key=lambda x: x["time"])
+
+            # 转换时间戳为可读格式
+            timestamp = latest_rate["time"] / 1000  # 转换为秒
+            readable_time = datetime.fromtimestamp(timestamp).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+
+            # 四舍五入保留2位小数
+            rate_value = round(latest_rate["value"], 4)
+
+            print("📈 最新的USD/CNY汇率信息:")
+            print(f"   汇率: {rate_value}")
+            print(f"   时间: {readable_time}")
+            print(f"   源货币: {latest_rate['source']}")
+            print(f"   目标货币: {latest_rate['target']}")
+            print(f"   时间戳: {latest_rate['time']}")
+
+            # 更新数据库中的汇率信息
+            db.exchange_rates.update_one(
+                {"type": "美金人民币汇率"},
+                {"$set": {"rate": rate_value, "update_time": readable_time}},
+                upsert=True,
+            )
+
+            print("✅ 汇率信息已更新到数据库")
+            return latest_rate
+
+    except httpx.RequestError as e:
+        print(f"❌ 请求错误: {e}")
+        return None
+    except httpx.HTTPStatusError as e:
+        print(f"❌ HTTP错误: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON解析错误: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ 未知错误: {e}")
+        return None
 
 
 # @scheduler.scheduled_job("cron", hour="20")
@@ -354,6 +423,7 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app=app, host="0.0.0.0", port=8085)
+    # get_latest_usd_cny_rate()
     # cron_job()
     # send_email_qingguan_history()
     #
@@ -367,5 +437,3 @@ if __name__ == "__main__":
     #     row for row in data
     #     if row.get('billno') =="MATS1637457000 ".strip()
     # ]
-
-          

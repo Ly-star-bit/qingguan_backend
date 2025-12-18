@@ -1,4 +1,3 @@
-
 import os
 import pickle
 import time
@@ -15,47 +14,64 @@ import sys
 import site
 from loguru import logger
 import setting
+
+
 class MoreLinkClient:
-    def __init__(self,node_path="",use_playwright_node = True,session_file="./session/session.pkl") -> None:
+    def __init__(
+        self,
+        node_path="",
+        use_playwright_node=True,
+        session_file="./session/session.pkl",
+    ) -> None:
         self.morelink_session_file = session_file
         self.node_path = node_path
         local_client = self.check_and_use_local_session()
         if local_client:
-            self.httpx_client = local_client 
+            self.httpx_client = local_client
         else:
             self.httpx_client = self.login_morelink_get_httpx_client()
-    
 
     def check_and_use_local_session(self):
         client = self.load_session()
         if client:
-            resp = client.post("https://morelink56.com/Common/IDATA?type=fun&proc=bll.RBTool.QueryFreightPolicyList")
+            resp = client.post(
+                "https://morelink56.com/Common/IDATA?type=fun&proc=bll.RBTool.QueryFreightPolicyList"
+            )
             if resp.status_code == 200 and resp.json()["success"]:
                 logger.info("本地client有效")
                 return client
         return None
+
     def save_session(self, httpx_client: httpx.Client):
         cookies = httpx_client.cookies.jar
         serialized_cookies = {cookie.name: cookie.value for cookie in cookies}
         session_data = {
-            'cookies': serialized_cookies,
-            'headers': dict(httpx_client.headers)
+            "cookies": serialized_cookies,
+            "headers": dict(httpx_client.headers),
         }
-        with open(self.morelink_session_file, 'wb') as f:
+        # 确保目录存在
+        session_dir = os.path.dirname(self.morelink_session_file)
+        if session_dir and not os.path.exists(session_dir):
+            os.makedirs(session_dir, exist_ok=True)
+            logger.info(f"创建session目录: {session_dir}")
+
+        with open(self.morelink_session_file, "wb") as f:
             pickle.dump(session_data, f)
+        logger.info(f"Session已保存到: {self.morelink_session_file}")
 
     def load_session(self):
         if os.path.exists(self.morelink_session_file):
-            with open(self.morelink_session_file, 'rb') as f:
+            with open(self.morelink_session_file, "rb") as f:
                 session_data = pickle.load(f)
                 self.httpx_client = httpx.Client()
-                for name, value in session_data['cookies'].items():
+                for name, value in session_data["cookies"].items():
                     self.httpx_client.cookies.set(name, value)
-                self.httpx_client.headers.update(session_data['headers'])
+                self.httpx_client.headers.update(session_data["headers"])
                 self.session_active = True
                 return self.httpx_client
         return None
-    def login_morelink_get_httpx_client(self,retry_counts:int=5):
+
+    def login_morelink_get_httpx_client(self, retry_counts: int = 5):
         """获取 morelink httpx client
 
         Args:
@@ -98,22 +114,22 @@ class MoreLinkClient:
         if self.node_path:
             local_node_runtime = execjs.ExternalRuntime(
                 name="Node.js (V8) local",
-                command='',
-                encoding='UTF-8',
-                runner_source=_runner_sources.Node
+                command="",
+                encoding="UTF-8",
+                runner_source=_runner_sources.Node,
             )
             # 这里是重点，需要强制性修改
             local_node_runtime._binary_cache = [self.node_path]
             local_node_runtime._available = True
             # 将刚创建好的 JavaScript 运行时 注册至 PyExecJS 中
-            execjs.register('local_node', local_node_runtime)
+            execjs.register("local_node", local_node_runtime)
 
-            context =execjs.get('local_node').compile(js_code)
+            context = execjs.get("local_node").compile(js_code)
 
         else:
             # 使用 execjs 编译并执行 JavaScript 代码
             context = execjs.compile(js_code)
-        for count in range(1,retry_counts+1):
+        for count in range(1, retry_counts + 1):
             logger.info(f"开始第{count}次尝试登陆")
             # 调用 JavaScript 文件中的函数
             encrypted_password = context.call(
@@ -134,7 +150,7 @@ class MoreLinkClient:
             login_payload = {
                 "type": "",
                 "txt_account": "RPA",
-                "valiCode": verify_resp.text.strip() ,
+                "valiCode": verify_resp.text.strip(),
                 "password": encrypted_password,
                 "tid": "10849",
                 "keyString": data["keyString"],
@@ -146,7 +162,6 @@ class MoreLinkClient:
             login_resp = client.post(
                 "https://morelink56.com/Login/VerificationLogin",
                 content=login_encoded_data,
-                
             )
             login_resp_data = login_resp.json()
             if login_resp_data["success"] == False:
@@ -154,7 +169,7 @@ class MoreLinkClient:
                 continue
             break
 
-        if login_resp_data['success'] == True:
+        if login_resp_data["success"] == True:
             logger.info(f"尝试{count}次登陆成功")
 
             self.save_session(client)
@@ -162,23 +177,24 @@ class MoreLinkClient:
         else:
             logger.error("登陆失败")
             return None
-    def dahuodingdan_all_data(self,start_date:str=None,end_date:str=None):
+
+    def dahuodingdan_all_data(self, start_date: str = None, end_date: str = None):
         """获取最近1个月的大货订单的数据
 
         Returns:
             list: _description_
         """
-        url  = "https://morelink56.com/Common/IDATA?type=dsjson&proc=Web_Select_BigWaybill_Back2_10849"
+        url = "https://morelink56.com/Common/IDATA?type=dsjson&proc=Web_Select_BigWaybill_Back2_10849"
         if end_date is None:
             end_date = datetime.now()
         if start_date is None:
             start_date = end_date - relativedelta(months=2)
-            
+
         if isinstance(end_date, str):
             end_date_str = end_date
         else:
             end_date_str = end_date.strftime("%Y-%m-%d")
-            
+
         if isinstance(start_date, str):
             start_date_str = start_date
         else:
@@ -190,16 +206,15 @@ class MoreLinkClient:
             "endtime": end_date_str,
             "Supplier_DS": "",
             "Consignor": "",
-            "orderStatus": ""
+            "orderStatus": "",
         }
 
         encoded_data = urllib.parse.urlencode(payload)
         client = self.httpx_client
-        response = client.post(url=url, data=encoded_data,timeout=30)
+        response = client.post(url=url, data=encoded_data, timeout=30)
 
         if response.status_code == 200:
             try:
-
                 json_data = response.json()[0]["tb"]
                 return json_data
             except (IndexError, KeyError) as e:
@@ -207,8 +222,11 @@ class MoreLinkClient:
                 return None
         else:
             print(f"HTTP error: {response.status_code}")
-            return None  
-    def dahuodingdan_worknum_search_httpx(self, numberno: str, signtype: str,start_date:str=None,end_date:str=None):
+            return None
+
+    def dahuodingdan_worknum_search_httpx(
+        self, numberno: str, signtype: str, start_date: str = None, end_date: str = None
+    ):
         """Query data of big waybill using the provided numberno and signtype.
 
         Args:
@@ -237,7 +255,6 @@ class MoreLinkClient:
             end_date_str = end_date
         else:
             end_date_str = end_date.strftime("%Y-%m-%d")
-        
 
         payload = {
             "otype": "",
@@ -249,7 +266,7 @@ class MoreLinkClient:
             "numberNo": numberno,
             "more": "1",
             "signtype": signtype,
-            "orderStatus": ""
+            "orderStatus": "",
         }
 
         encoded_data = urllib.parse.urlencode(payload)
@@ -265,9 +282,9 @@ class MoreLinkClient:
                 return None
         else:
             print(f"HTTP error: {response.status_code}")
-            return None   
-    
-    def zongdan_api_httpx(self,start_date:str=None,end_date:str=None):
+            return None
+
+    def zongdan_api_httpx(self, start_date: str = None, end_date: str = None):
         """Retrieve data of zongdan for the last year.
 
         Args:
@@ -282,7 +299,7 @@ class MoreLinkClient:
             end_date_str = end_date.strftime("%Y-%m-%d")
         else:
             end_date_str = end_date
-            
+
         if start_date is None:
             start_date = datetime.now() - relativedelta(years=1)
             start_date_str = start_date.strftime("%Y-%m-%d")
@@ -295,13 +312,13 @@ class MoreLinkClient:
             "startdate": start_date_str,
             "enddate": end_date_str,
             "isrepair": "1",
-            "filterRules": [{"field":"billno","op":"contains","value":""}]
+            "filterRules": [{"field": "billno", "op": "contains", "value": ""}],
         }
 
         encoded_payload = urllib.parse.urlencode(zongdan_payload)
         client = self.httpx_client
 
-        response = client.post(url=zongdan_list_url, data=encoded_payload,timeout=30)
+        response = client.post(url=zongdan_list_url, data=encoded_payload, timeout=30)
 
         if response.status_code == 200:
             try:
@@ -326,20 +343,20 @@ class MoreLinkClient:
         cooperate_client_res = client.post(url=cooperate_client_url)
         if cooperate_client_res.status_code == 200:
             return cooperate_client_res.json()
+
     def fba_warehouse_search(self):
         """获取所有fba仓库的信息
 
         Returns:
             _type_: _description_
         """
-        fba_warehoust_url = (
-        "https://morelink56.com/Common/IDATA?type=list&proc=Web_Select_WarehouseInfo"
-        )
+        fba_warehoust_url = "https://morelink56.com/Common/IDATA?type=list&proc=Web_Select_WarehouseInfo"
         client = self.httpx_client
 
         fba_warehouse_res = client.post(url=fba_warehoust_url)
         if fba_warehouse_res.status_code == 200:
             return fba_warehouse_res.json()["rows"]
+
     def search_warehouse_size(self, sono: str, cid: str):
         search_url = (
             "https://morelink56.com/Common/IDATA?type=fun&proc=bll.goodssize.cargo_size"
@@ -358,8 +375,8 @@ class MoreLinkClient:
         )
         if res.status_code == 200 and res.json()["success"]:
             return res.json()
-    
-    def get_dahuo_data_by_id(self,worknum:str):
+
+    def get_dahuo_data_by_id(self, worknum: str):
         """根据工作单号获取大货订单数据
 
         Args:
@@ -371,9 +388,7 @@ class MoreLinkClient:
 
         url = "https://morelink56.com/Common/IDATA?type=dsjson&proc=Web_Select_BigWaybill_ByID"
 
-        payload = {
-            'operNo':worknum
-        }
+        payload = {"operNo": worknum}
 
         encoded_payload = urllib.parse.urlencode(payload)
         client = self.httpx_client
@@ -382,6 +397,7 @@ class MoreLinkClient:
             return response.json()[0]["tb"][0]
         else:
             return None
+
     @staticmethod
     def zongdan_filter_json_data(data_list, orderno=None, billno=None):
         """Filter data_list based on orderno or billno.
@@ -395,7 +411,8 @@ class MoreLinkClient:
             list: Filtered data based on the provided parameters.
         """
         return [
-            data for data in data_list
-            if (orderno is None or data.get('orderno') == orderno)
-            and (billno is None or data.get('billno') == billno)
+            data
+            for data in data_list
+            if (orderno is None or data.get("orderno") == orderno)
+            and (billno is None or data.get("billno") == billno)
         ]

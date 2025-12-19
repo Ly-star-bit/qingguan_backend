@@ -77,17 +77,12 @@ def fetch_products_from_api(
                     "price": float(item.get("单价", 0)),
                     "pcs_per_box": int(item.get("件箱", 1)),
                     "tax_rate": total_tax_rate,
-                    # **修改点**: 假设API现在提供重量范围
-                    "min_weight_per_box": float(
-                        item.get("min_weight", 0)
-                    ),  # 示例：增加最小重量字段
-                    "max_weight_per_box": float(
-                        item.get("max_weight", 0)
-                    ),  # 示例：增加最大重量字段
+                    "min_weight_per_box": float(item.get("min_weight", 0)),
+                    "max_weight_per_box": float(item.get("max_weight", 0)),
                 }
                 api_products.append(product)
             except Exception as e:
-                print(f"[{ item.get('中文品名', '')}] 获取商品信息错误: {str(e)}")
+                print(f"[{item.get('中文品名', '')}] 获取商品信息错误: {str(e)}")
                 continue
 
         return api_products
@@ -104,35 +99,26 @@ def fetch_products_from_api(
 
 
 def optimize_packing_selection(
-    products_data: List[Dict],  # 产品数据列表
-    W_target: float = 3537,  # 目标总重量 (kg)
-    B_target: int = 214,  # 目标总箱数
-    alpha: float = 0.46,  # 货值/重量 最低比率 (美元/千克)
-    beta_cny: float = 1.27,  # 税金/重量 最高比率 (人民币/千克)
-    exchange_rate: float = 7.22,  # USD to CNY 汇率
-    k: int = 3,  # 最多选择 k 个不同的产品品类
+    products_data: List[Dict],
+    W_target: float = 3537,
+    B_target: int = 214,
+    alpha: float = 0.46,
+    beta_cny: float = 1.27,
+    exchange_rate: float = 7.22,
+    k: int = 3,
     min_boxes_per_product: int = 20,
     expansion_factor: int = None,
-    max_attempts: int = 5,  # 最大优化尝试次数
+    max_attempts: int = 5,
 ) -> Dict:
     """
-    装箱选择优化函数 (已更新以处理重量范围)
-    执行多次优化尝试，选择最优结果（货值/重量最高，税金/重量最低）
-
-    Args:
-        products_data: 产品数据列表, 必须包含 name, price, pcs_per_box, tax_rate,
-                       **min_weight_per_box**, **max_weight_per_box** 字段
-        ... (其他参数不变)
-        max_attempts: 最大优化尝试次数
+    装箱选择优化函数，支持原始约束失败后自动切换到宽松约束（alpha=0.1, beta=20）
     """
     if expansion_factor:
-        alpha = alpha * expansion_factor
-        beta_cny = beta_cny * expansion_factor
-    products = products_data
+        alpha *= expansion_factor
+        beta_cny *= expansion_factor
 
-    # 检查产品数据是否为空
-    if not products or len(products) == 0:
-        print("❌ 错误：产品数据为空，无法进行优化")
+    if not products_data:
+        print("❌ 错误：产品数据为空")
         return {
             "status": "Failed",
             "success": False,
@@ -141,300 +127,203 @@ def optimize_packing_selection(
             "summary": {},
         }
 
-    print(f"使用传入的产品数据进行优化，共 {len(products)} 个产品")
-    print(f"将执行最多 {max_attempts} 次优化尝试，以找到最优结果")
+    # 优化配置：先尝试原始参数，失败后尝试宽松参数
+    trial_configs = [
+        {"alpha": alpha, "beta": beta_cny, "is_relaxed": False, "label": "原始参数"},
+        {"alpha": 0.1, "beta": 20.0, "is_relaxed": True, "label": "宽松参数"},
+    ]
 
-    # 存储所有成功的优化结果
-    successful_results = []
+    for cfg in trial_configs:
+        curr_alpha, curr_beta, is_relaxed = cfg["alpha"], cfg["beta"], cfg["is_relaxed"]
 
-    # 多次尝试优化
-    for attempt in range(max_attempts):
-        print(f"\n=== 第 {attempt + 1} 次优化尝试 ===")
+        if is_relaxed:
+            print(f"\n{'='*80}")
+            print(
+                f"⚠️  警告：原始参数下无可行解 (alpha={alpha:.2f}, beta_cny={beta_cny:.2f})"
+            )
+            print(
+                f"🔄 正在切换到宽松参数重新尝试: alpha={curr_alpha}, beta_cny={curr_beta}"
+            )
+            print(f"{'='*80}\n")
+        else:
+            print(
+                f"\n开始使用原始参数进行优化 (alpha={curr_alpha:.2f}, beta_cny={curr_beta:.2f})..."
+            )
 
-        # ======================
-        # 数据预处理
-        # ======================
-        n: int = len(products)
+        results = []
+        for attempt in range(max_attempts):
+            # 建立优化模型
+            model = lp.LpProblem(
+                f"Packing_{'Relaxed' if is_relaxed else 'Original'}_{attempt+1}",
+                lp.LpMinimize,
+            )
+            n = len(products_data)
 
-        names: list = [p["name"] for p in products]
-        unit_price_usd = [p["price"] for p in products]
-        # 如果有膨胀系数，则膨胀价格
-        if expansion_factor:
-            unit_price_usd = [p * expansion_factor for p in unit_price_usd]
+            # 决策变量
+            b = lp.LpVariable.dicts("boxes", range(n), lowBound=0, cat="Integer")
+            z = lp.LpVariable.dicts("select", range(n), cat="Binary")
+            w = lp.LpVariable.dicts("weight", range(n), lowBound=0, cat="Continuous")
 
-        pcs_per_box = [p["pcs_per_box"] for p in products]
-        tax_rates = [p["tax_rate"] for p in products]
-        # **修改点**: 获取重量范围
-        min_weights = [p["min_weight_per_box"] for p in products]
-        max_weights = [p["max_weight_per_box"] for p in products]
-        # Get count of each weight value
-        weight_counts = Counter(min_weights)
+            # 数据准备
+            names = [p["name"] for p in products_data]
+            unit_prices = [
+                p["price"] * (expansion_factor or 1.0) for p in products_data
+            ]
+            pcs_per_box = [p["pcs_per_box"] for p in products_data]
+            tax_rates = [p["tax_rate"] for p in products_data]
 
-        # Find values that appear more than once
-        duplicates = {value for value, count in weight_counts.items() if count > 1}
+            # 重量范围处理
+            avg_w_box = W_target / B_target if B_target > 0 else 0
+            min_weights, max_weights = [], []
+            for p in products_data:
+                mi, ma = p.get("min_weight_per_box", 0), p.get("max_weight_per_box", 0)
+                if not ma or ma <= 0:
+                    mi, ma = avg_w_box - 7, avg_w_box + 7
+                min_weights.append(mi)
+                max_weights.append(ma)
 
-        # 如果有重复值，在每次尝试中随机增加1-5
-        min_weights = [
-            p["min_weight_per_box"] + random.uniform(1, 5)
-            if p["min_weight_per_box"] in duplicates
-            else p["min_weight_per_box"]
-            for p in products
-        ]
+            # 随机化重量以避开局部最优
+            dups = {val for val, count in Counter(min_weights).items() if count > 1}
+            min_weights = [
+                mw + random.uniform(0.1, 2.0) if mw in dups else mw
+                for mw in min_weights
+            ]
 
-        if B_target > 0:
-            avg_weight_per_box = round(W_target / B_target, 2)
-            print(f"计算得出全局平均单箱重量: {avg_weight_per_box:.2f} kg")
-            for i, p in enumerate(products):
-                # 使用 .get() 来安全地访问可能不存在的键
-                # 如果 max_weight_per_box 是空的, None, 或者 0, 则视为无效
-                if not p.get("max_weight_per_box") or p.get("max_weight_per_box") <= 0:
-                    print(
-                        f"产品 '{p.get('name', '未知')}' 的重量范围为空或无效, 将使用平均单箱重量。"
-                    )
-                    min_weights[i] = avg_weight_per_box - 7
-                    max_weights[i] = avg_weight_per_box + 7
+            val_per_box = [unit_prices[i] * pcs_per_box[i] for i in range(n)]
+            tax_per_box = [
+                val_per_box[i] * tax_rates[i] * exchange_rate for i in range(n)
+            ]
 
-        value_per_box_usd = [unit_price_usd[i] * pcs_per_box[i] for i in range(n)]
-        tax_per_box_usd = [value_per_box_usd[i] * tax_rates[i] for i in range(n)]
-        tax_per_box_cny = [t * exchange_rate for t in tax_per_box_usd]
-
-        # ======================
-        # 建立优化模型
-        # ======================
-        model = lp.LpProblem(f"Packing_Selection_Optimization_Attempt_{attempt + 1}", lp.LpMinimize)
-
-        # --- 决策变量 ---
-        # b[i]: 产品i的箱数 (整数)
-        b = lp.LpVariable.dicts("boxes", range(n), lowBound=0, cat="Integer")
-        # z[i]: 是否选择产品i (二进制)
-        z = lp.LpVariable.dicts("select", range(n), cat="Binary")
-        # **新增变量**: w[i]: 产品i的总重量 (连续)
-        w: dict = lp.LpVariable.dicts(
-            "total_weight", range(n), lowBound=0, cat="Continuous"
-        )
-
-        # --- 目标函数：最小化总税金（CNY） ---
-        model += (
-            lp.lpSum([tax_per_box_cny[i] * b[i] for i in range(n)]),
-            "Total_Tax_CNY",
-        )
-
-        # --- 约束条件 ---
-        # 1. 总箱数约束
-        model += lp.lpSum([b[i] for i in range(n)]) == B_target, "Total_Boxes"
-
-        # 2. **修改点**: 总重量约束 (现在基于新的w变量)
-        model += lp.lpSum([w[i] for i in range(n)]) == W_target, "Total_Weight"
-
-        # 3. 货值/重量比率约束
-        total_value_usd = lp.lpSum([value_per_box_usd[i] * b[i] for i in range(n)])
-        model += total_value_usd >= alpha * W_target, "Min_Value_Weight_Ratio"
-
-        # 4. 税金/重量比率约束
-        # if not expansion_factor:
-        total_tax_cny = lp.lpSum([tax_per_box_cny[i] * b[i] for i in range(n)])
-        model += total_tax_cny <= beta_cny * W_target, "Max_Tax_Weight_Ratio"
-
-        # 5. 最多选择k个品类约束
-        model += lp.lpSum([z[i] for i in range(n)]) == k, "Max_Product_Selection"
-
-        # 6. 关联约束
-        for i in range(n):
-            # 如果选择一个产品 (z[i]=1)，其箱数b[i]必须大于等于最小箱数
-            model += b[i] >= min_boxes_per_product * z[i], f"Min_Boxes_Constraint_{i}"
-            # 如果不选择一个产品 (z[i]=0)，其箱数b[i]必须为0
-            model += b[i] <= B_target * z[i], f"Link_Boxes_to_Selection_{i}"
-
-            # 7. **新增约束**: 关联每个品类的总重量w[i]和箱数b[i]
-            # 这是实现线性化的关键步骤
-            model += w[i] >= min_weights[i] * b[i], f"Link_Min_Weight_{i}"
-            model += w[i] <= max_weights[i] * b[i], f"Link_Max_Weight_{i}"
-
-        # --- 求解模型 ---
-        solver = lp.PULP_CBC_CMD(timeLimit=30)
-        model.solve(solver)
-
-        # ======================
-        # 处理结果
-        # ======================
-        if lp.LpStatus[model.status] == lp.LpStatus[1]:  # Optimal
-            total_weight_check = 0
-            total_value_usd_check = 0
-            total_tax_cny_check = 0
-            selected_count = 0
-
-            selected_products = []
+            # 目标函数与约束
+            model += lp.lpSum([tax_per_box[i] * b[i] for i in range(n)])
+            model += lp.lpSum([b[i] for i in range(n)]) == B_target
+            model += lp.lpSum([w[i] for i in range(n)]) == W_target
+            model += (
+                lp.lpSum([val_per_box[i] * b[i] for i in range(n)])
+                >= curr_alpha * W_target
+            )
+            model += (
+                lp.lpSum([tax_per_box[i] * b[i] for i in range(n)])
+                <= curr_beta * W_target
+            )
+            model += lp.lpSum([z[i] for i in range(n)]) == k
 
             for i in range(n):
-                boxes_count = b[i].varValue
-                if boxes_count > 0:
-                    selected_count += 1
-                    # 从结果中获取每个品类的总重量
-                    total_w = w[i].varValue
-                    # 计算出实际的单箱重量
-                    avg_weight_per_box = total_w / boxes_count if boxes_count > 0 else 0
+                model += b[i] >= min_boxes_per_product * z[i]
+                model += b[i] <= B_target * z[i]
+                model += w[i] >= min_weights[i] * b[i]
+                model += w[i] <= max_weights[i] * b[i]
 
-                    val_usd = value_per_box_usd[i] * boxes_count
-                    tax_cny = tax_per_box_cny[i] * boxes_count
-                    pcs = pcs_per_box[i] * boxes_count
+            # 求解
+            model.solve(lp.PULP_CBC_CMD(timeLimit=30, msg=0))
 
-                    total_weight_check += total_w
-                    total_value_usd_check += val_usd
-                    total_tax_cny_check += tax_cny
+            if lp.LpStatus[model.status] == "Optimal":
+                selected = []
+                tw, tv, tt = 0, 0, 0
+                for i in range(n):
+                    if b[i].varValue > 0:
+                        bc = int(b[i].varValue)
+                        wv = w[i].varValue
+                        vv = val_per_box[i] * bc
+                        tc = tax_per_box[i] * bc
+                        selected.append(
+                            {
+                                "name": names[i],
+                                "boxes": bc,
+                                "weight_per_box": wv / bc,
+                                "total_weight": wv,
+                                "value_usd": vv,
+                                "tax_cny": tc,
+                                "pieces_per_box": pcs_per_box[i],
+                                "pieces": bc * pcs_per_box[i],
+                            }
+                        )
+                        tw += wv
+                        tv += vv
+                        tt += tc
 
-                    product_result = {
-                        "name": names[i],
-                        "boxes": int(boxes_count),
-                        "weight_per_box": avg_weight_per_box,
-                        "total_weight": total_w,
-                        "value_usd": val_usd,
-                        "tax_cny": tax_cny,
-                        "pieces_per_box": pcs_per_box[i],
-                        "pieces": int(pcs),
+                results.append(
+                    {
+                        "selected_products": selected,
+                        "summary": {
+                            "total_weight": tw,
+                            "total_value_usd": tv,
+                            "total_tax_cny": tt,
+                            "value_per_weight_usd": tv / tw if tw > 0 else 0,
+                            "tax_per_weight_cny": tt / tw if tw > 0 else 0,
+                            "selected_count": len(selected),
+                            "is_relaxed": is_relaxed,
+                            "status_message": "⚠️ 原始参数失败，当前使用宽松参数 (alpha=0.1, beta=20)"
+                            if is_relaxed
+                            else "✅ 成功满足原始约束条件",
+                        },
                     }
-                    selected_products.append(product_result)
+                )
 
-            # 计算比率
-            value_per_weight_usd = total_value_usd_check / total_weight_check
-            tax_per_weight_cny = total_tax_cny_check / total_weight_check
-            value_ratio_ok = value_per_weight_usd >= alpha
-            tax_ratio_ok = tax_per_weight_cny <= beta_cny
+        if results:
+            # 选择最优结果
+            best = max(
+                results,
+                key=lambda x: (
+                    x["summary"]["value_per_weight_usd"],
+                    -x["summary"]["tax_per_weight_cny"],
+                ),
+            )
+            s = best["summary"]
+            s["MPF"] = max(33.58, min(634.62, s["total_value_usd"] * 0.003464))
 
-            # 保存结果
-            result = {
-                "attempt": attempt + 1,
-                "status": lp.LpStatus[model.status],
+            # 打印优化报表
+            print("\n" + "=" * 85)
+            print(f"【优化报表】 {s['status_message']}")
+            print(f"使用参数: alpha={curr_alpha:.2f}, beta_cny={curr_beta:.2f}")
+            print("-" * 85)
+            print(
+                f"{'品名':<25} | {'箱数':>5} | {'总重(kg)':>10} | {'货值(USD)':>12} | {'税金(CNY)':>10}"
+            )
+            for p in best["selected_products"]:
+                print(
+                    f"{p['name']:<25} | {p['boxes']:>5} | {p['total_weight']:>10.1f} | {p['value_usd']:>12.1f} | {p['tax_cny']:>10.1f}"
+                )
+            print("-" * 85)
+            print(
+                f"总计: {B_target:>22} | {s['total_weight']:>10.1f} | {s['total_value_usd']:>12.1f} | {s['total_tax_cny']:>10.1f}"
+            )
+            print(
+                f"验证指标: 货值/重量={s['value_per_weight_usd']:.2f} (阈值≥{curr_alpha:.2f}) | 税金/重量={s['tax_per_weight_cny']:.2f} (阈值≤{curr_beta:.2f})"
+            )
+            print("=" * 85 + "\n")
+
+            return {
+                "status": "Optimal",
                 "success": True,
-                "selected_products": selected_products,
-                "summary": {
-                    "total_weight": total_weight_check,
-                    "total_value_usd": total_value_usd_check,
-                    "total_tax_cny": total_tax_cny_check,
-                    "selected_count": selected_count,
-                    "value_per_weight_usd": value_per_weight_usd,
-                    "tax_per_weight_cny": tax_per_weight_cny,
-                    "value_ratio_ok": value_ratio_ok,
-                    "tax_ratio_ok": tax_ratio_ok,
+                "is_relaxed": is_relaxed,
+                "selected_products": best["selected_products"],
+                "summary": s,
+                "parameters": {
+                    "W_target": W_target,
+                    "B_target": B_target,
+                    "alpha": curr_alpha,
+                    "beta_cny": curr_beta,
+                    "original_alpha": alpha if is_relaxed else curr_alpha,
+                    "original_beta_cny": beta_cny if is_relaxed else curr_beta,
+                    "exchange_rate": exchange_rate,
+                    "k": k,
+                    "min_boxes_per_product": min_boxes_per_product,
                 },
             }
-            successful_results.append(result)
-            print(f"✅ 第 {attempt + 1} 次尝试成功！货值/重量={value_per_weight_usd:.2f}, 税金/重量={tax_per_weight_cny:.2f}")
-        else:
-            print(f"❌ 第 {attempt + 1} 次尝试失败: {lp.LpStatus[model.status]}")
 
-    # ======================
-    # 选择最优结果
-    # ======================
-    if successful_results:
-        print("\n=== 优化结果对比 ===")
-        print(f"{'尝试':>4} | {'货值/重量':>12} | {'税金/重量':>12} | {'选择产品数':>8}")
-        print("-" * 50)
-
-        for result in successful_results:
-            summary = result["summary"]
-            print(
-                f"{result['attempt']:>4} | {summary['value_per_weight_usd']:12.2f} | "
-                f"{summary['tax_per_weight_cny']:12.2f} | {summary['selected_count']:>8}"
-            )
-
-        # 选择最优结果：货值/重量最高，税金/重量最低
-        best_result = max(
-            successful_results,
-            key=lambda x: (x["summary"]["value_per_weight_usd"], -x["summary"]["tax_per_weight_cny"])
-        )
-
-        print(f"\n🎯 选择第 {best_result['attempt']} 次结果作为最优解:")
-        print(f"   货值/重量 = {best_result['summary']['value_per_weight_usd']:.2f} USD/kg")
-        print(f"   税金/重量 = {best_result['summary']['tax_per_weight_cny']:.2f} CNY/kg")
-
-        # 计算 MPF
-        allGoodsPrice = best_result["summary"]["total_value_usd"]
-        mpf_result = allGoodsPrice * 0.003464
-        mpf_min_total = (
-            33.58
-            if mpf_result < 33.58
-            else (634.62 if mpf_result > 634.62 else mpf_result)
-        )
-        best_result["summary"]["MPF"] = mpf_min_total
-
-        # 构建返回结果（保持原有结构）
-        result = {
-            "status": best_result["status"],
-            "success": best_result["success"],
-            "parameters": {
-                "W_target": W_target,
-                "B_target": B_target,
-                "alpha": alpha,
-                "beta_cny": beta_cny,
-                "exchange_rate": exchange_rate,
-                "k": k,
-                "min_boxes_per_product": min_boxes_per_product,
-            },
-            "selected_products": best_result["selected_products"],
-            "summary": best_result["summary"],
-        }
-
-        # 打印优化成功的详细信息
-        print(f"\n✅ 优化成功！总箱数={B_target}, 总重量={W_target}kg\n")
-        print(f"要求：货值/重量 ≥ {alpha:.2f} USD/kg, 税金/重量 ≤ {beta_cny:.2f} CNY/kg")
-        print(f"汇率: 1 USD = {exchange_rate} CNY，最多选 {k} 个品类")
-        print("-" * 105)
-
-        total_weight_check = best_result["summary"]["total_weight"]
-        total_value_usd_check = best_result["summary"]["total_value_usd"]
-        total_tax_cny_check = best_result["summary"]["total_tax_cny"]
-        selected_count = best_result["summary"]["selected_count"]
-
-        print(
-            f"{'品名':<15} : {'箱数':>4} | {'总重(kg)':>9} | {'单箱重(kg)':>10} | "
-            f"{'货值(USD)':>10} | {'税金(CNY)':>9} | {'总件数':>7}"
-        )
-        print("-" * 105)
-
-        for product in best_result["selected_products"]:
-            print(
-                f"{product['name']:<15} : {product['boxes']:4d} | {product['total_weight']:9.2f} | {product['weight_per_box']:10.2f} | "
-                f"{product['value_usd']:10.2f} | {product['tax_cny']:9.2f} | {product['pieces']:7d}"
-            )
-        print("-" * 105)
-        print(
-            f"总计: {B_target:4.0f} | {total_weight_check:9.2f} | {' ':>10} | "
-            f"{total_value_usd_check:10.2f} | {total_tax_cny_check:9.2f} |"
-        )
-
-        # 验证比率
-        value_per_weight_usd = best_result["summary"]["value_per_weight_usd"]
-        tax_per_weight_cny = best_result["summary"]["tax_per_weight_cny"]
-        value_ratio_ok = best_result["summary"]["value_ratio_ok"]
-        tax_ratio_ok = best_result["summary"]["tax_ratio_ok"]
-
-        print("\n--- 结果验证 ---")
-        print(
-            f"货值/重量 = {value_per_weight_usd:.2f} USD/kg (要求 ≥ {alpha}) {'✅' if value_ratio_ok else '❌'}"
-        )
-        if expansion_factor:
-            print(
-                f"有膨胀系数，不需要验证单位税金, 税金/重量 = {tax_per_weight_cny:.2f} CNY/kg ✅"
-            )
-        else:
-            print(
-                f"税金/重量 = {tax_per_weight_cny:.2f} CNY/kg (要求 ≤ {beta_cny}) {'✅' if tax_ratio_ok else '❌'}"
-            )
-
-        return result
-    else:
-        print("\n❌ 所有优化尝试都失败了，请检查约束是否过于严格。")
-        return {
-            "status": "Failed",
-            "success": False,
-            "error": "所有优化尝试都失败",
-            "selected_products": [],
-            "summary": {},
-        }
+    print("\n❌ 遗憾：即使使用宽松参数也无法在当前数据下找到可行解。")
+    return {
+        "status": "Failed",
+        "success": False,
+        "error": "所有参数配置下均无解",
+        "selected_products": [],
+        "summary": {},
+    }
 
 
 if __name__ == "__main__":
-    # 更新了示例数据，加入了单箱重量范围
+    # 测试数据
     upload_data = {
         "products_data": [
             {
@@ -479,6 +368,6 @@ if __name__ == "__main__":
         k=upload_data["k"],
         min_boxes_per_product=upload_data["min_boxes_per_product"],
         expansion_factor=upload_data["expansion_factor"],
-        max_attempts=5,  # 指定最大尝试次数
+        max_attempts=5,
     )
     print(result)

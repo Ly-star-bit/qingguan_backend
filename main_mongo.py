@@ -283,6 +283,17 @@ def morelink_get_operNo_cron():
     morelink_get_operNo()
 
 
+@scheduler.scheduled_job("interval", minutes=20)
+def work_num_backfilling_job():
+    """工作单号回填定时任务"""
+    from app.tools_auto.work_num_dadan import execute_backfilling
+
+    try:
+        execute_backfilling()
+    except Exception as e:
+        task_logger.error(f"工作单号回填任务执行失败: {traceback.format_exc()}")
+
+
 @scheduler.scheduled_job("interval", days=3)
 def get_latest_usd_cny_rate():
     """

@@ -9,6 +9,7 @@ from loguru import logger
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from app.tools_auto.product_name_excel_processor import find_matching_products
+from app.tools_auto.work_num_dadan import work_num_dadan_main
 
 # 定义路由
 tool_auto_router = APIRouter(tags=["工具自动化"], prefix="/tools_auto")
@@ -128,6 +129,15 @@ async def get_tasks():
                 },
             },
         },
+        {
+            "id": "work_num_dadan_task_001",
+            "title": "工作单号打单",
+            "apiEndpoint": "/tools_auto/work_num_dadan",
+            "enableFileUpload": True,
+            "enableApiParams": False,
+            "downloadBaseUrl": "/tools_auto/download",
+            "apiParams": {},
+        },
     ]
     return tasks
 
@@ -231,6 +241,190 @@ async def process_product_excel(
                 "event": "result",
                 "data": json.dumps(result_data, ensure_ascii=False),
             }
+
+        except Exception as e:
+            error_msg = f"任务执行失败: {str(e)}"
+            logger.exception(error_msg)
+            error_result = {
+                "task": task_id,
+                "result": {"error": error_msg},
+                "message": error_msg,
+            }
+            yield {
+                "event": "result",
+                "data": json.dumps(error_result, ensure_ascii=False),
+            }
+
+    return EventSourceResponse(event_generator())
+
+
+@tool_auto_router.post("/work_num_dadan")
+async def work_num_dadan(
+    file: UploadFile = File(..., description="工作单号打单Excel文件"),
+):
+    """
+    工作单号打单处理
+    通过 SSE 返回执行过程
+
+    Args:
+        file: 工作单号打单Excel文件
+
+    Returns:
+        EventSourceResponse: SSE流式响应
+    """
+    task_id = str(uuid.uuid4())
+
+    # 生成带时间戳的文件名
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # 保存上传的文件
+    safe_filename = "".join(
+        c if c.isalnum() or c in "._-" else "_" for c in file.filename
+    )
+    name_stem = Path(safe_filename).stem
+    suffix = Path(safe_filename).suffix
+    saved_filename = f"work_num_dadan_{name_stem}_{timestamp}{suffix}"
+    saved_file_path = BASE_UPLOAD_DIR / saved_filename
+
+    # 保存上传文件
+    content = await file.read()
+    with open(saved_file_path, "wb") as f:
+        f.write(content)
+
+    async def event_generator():
+        # 用于存储进度消息的队列
+        progress_queue = asyncio.Queue()
+
+        def progress_callback(step_name, status, message):
+            """进度回调函数，将进度信息放入队列"""
+            try:
+                # 使用 asyncio.run_coroutine_threadsafe 从同步代码调用异步函数
+                loop = asyncio.get_event_loop()
+                asyncio.run_coroutine_threadsafe(
+                    progress_queue.put((step_name, status, message)), loop
+                )
+            except Exception as e:
+                logger.error(f"进度回调错误: {e}")
+
+        try:
+            # 1. 注册步骤
+            step_info = {
+                "id": task_id,
+                "step": 1,
+                "task_name": "工作单号打单处理",
+            }
+            yield {"data": json.dumps(step_info, ensure_ascii=False)}
+
+            # 2. 发送初始状态
+            status_update = {
+                "task": task_id,
+                "status": "running",
+                "message": "文件已成功保存，开始处理...",
+            }
+            yield {
+                "event": "status",
+                "data": json.dumps(status_update, ensure_ascii=False),
+            }
+
+            # 3. 启动后台任务执行
+            loop = asyncio.get_event_loop()
+            task_future = loop.run_in_executor(
+                executor,
+                work_num_dadan_main,
+                content,  # 传入二进制内容
+                True,  # is_binary=True
+                progress_callback,  # 传入进度回调
+            )
+
+            # 4. 持续从队列中获取进度更新并推送
+            while not task_future.done():
+                try:
+                    # 等待进度更新，设置超时避免阻塞
+                    step_name, status, message = await asyncio.wait_for(
+                        progress_queue.get(), timeout=0.5
+                    )
+
+                    # 发送进度更新
+                    status_update = {
+                        "task": task_id,
+                        "status": status,
+                        "step_name": step_name,
+                        "message": message,
+                    }
+                    yield {
+                        "event": "status",
+                        "data": json.dumps(status_update, ensure_ascii=False),
+                    }
+                except asyncio.TimeoutError:
+                    # 超时继续等待
+                    continue
+
+            # 5. 处理剩余的进度消息
+            while not progress_queue.empty():
+                try:
+                    step_name, status, message = await asyncio.wait_for(
+                        progress_queue.get(), timeout=0.1
+                    )
+                    status_update = {
+                        "task": task_id,
+                        "status": status,
+                        "step_name": step_name,
+                        "message": message,
+                    }
+                    yield {
+                        "event": "status",
+                        "data": json.dumps(status_update, ensure_ascii=False),
+                    }
+                except asyncio.TimeoutError:
+                    break
+
+            # 6. 获取任务结果
+            (
+                exists_CourierNumber_worknum,
+                root_path,
+                new_file_path,
+                huitian_data,
+            ) = await task_future
+
+            # 7. 发送结果
+            result_data = {
+                "task": task_id,
+                "result": {},
+                "message": "任务执行成功",
+            }
+
+            # 处理返回的文件路径
+            if new_file_path:
+                # new_file_path 格式: file/ups_excel_file/template_整柜{timestamp}.xlsx
+                new_file_path_obj = Path(new_file_path)
+                result_data["result"]["excel_file_name"] = new_file_path_obj.name
+                result_data["result"]["excel_file_path"] = str(new_file_path)
+
+            if root_path:
+                # root_path 是 PDF 文件的根目录
+                root_path_obj = Path(root_path)
+                result_data["result"]["pdf_folder"] = str(root_path_obj)
+                result_data["result"]["pdf_folder_name"] = root_path_obj.name
+
+            if exists_CourierNumber_worknum:
+                result_data["result"]["exists_courier_numbers"] = (
+                    exists_CourierNumber_worknum
+                )
+
+            yield {
+                "event": "result",
+                "data": json.dumps(result_data, ensure_ascii=False),
+            }
+
+            # 8. 在后台保存回填数据，等待定时任务处理
+            if huitian_data:
+                from app.tools_auto.work_num_dadan import save_backfilling_data
+
+                await loop.run_in_executor(
+                    executor,
+                    save_backfilling_data,
+                    huitian_data,
+                )
 
         except Exception as e:
             error_msg = f"任务执行失败: {str(e)}"

@@ -294,14 +294,15 @@ async def work_num_dadan(
     async def event_generator():
         # 用于存储进度消息的队列
         progress_queue = asyncio.Queue()
+        # 显式捕获正在运行的事件循环
+        main_loop = asyncio.get_running_loop()
 
         def progress_callback(step_name, status, message):
             """进度回调函数，将进度信息放入队列"""
             try:
-                # 使用 asyncio.run_coroutine_threadsafe 从同步代码调用异步函数
-                loop = asyncio.get_event_loop()
+                # 使用主线程的 loop 安全地提交协程
                 asyncio.run_coroutine_threadsafe(
-                    progress_queue.put((step_name, status, message)), loop
+                    progress_queue.put((step_name, status, message)), main_loop
                 )
             except Exception as e:
                 logger.error(f"进度回调错误: {e}")

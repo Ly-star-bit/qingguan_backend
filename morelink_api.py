@@ -14,6 +14,8 @@ import sys
 import site
 from loguru import logger
 import setting
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Any, Optional
 
 
 class MoreLinkClient:
@@ -26,6 +28,7 @@ class MoreLinkClient:
         self.morelink_session_file = session_file
         self.node_path = node_path
         local_client = self.check_and_use_local_session()
+        # local_client = None
         if local_client:
             self.httpx_client = local_client
         else:
@@ -33,13 +36,17 @@ class MoreLinkClient:
 
     def check_and_use_local_session(self):
         client = self.load_session()
-        if client:
-            resp = client.post(
-                "https://morelink56.com/Common/IDATA?type=fun&proc=bll.RBTool.QueryFreightPolicyList"
-            )
-            if resp.status_code == 200 and resp.json()["success"]:
-                logger.info("本地client有效")
-                return client
+        try:
+            if client:
+                resp = client.post(
+                    "https://morelink56.com/Common/IDATA?type=fun&proc=bll.RBTool.QueryFreightPolicyList",
+                    timeout=10,
+                )
+                if resp.status_code == 200 and resp.json()["success"]:
+                    logger.info("本地client有效")
+                    return client
+        except Exception as e:
+            return None
         return None
 
     def save_session(self, httpx_client: httpx.Client):
@@ -49,15 +56,8 @@ class MoreLinkClient:
             "cookies": serialized_cookies,
             "headers": dict(httpx_client.headers),
         }
-        # 确保目录存在
-        session_dir = os.path.dirname(self.morelink_session_file)
-        if session_dir and not os.path.exists(session_dir):
-            os.makedirs(session_dir, exist_ok=True)
-            logger.info(f"创建session目录: {session_dir}")
-
         with open(self.morelink_session_file, "wb") as f:
             pickle.dump(session_data, f)
-        logger.info(f"Session已保存到: {self.morelink_session_file}")
 
     def load_session(self):
         if os.path.exists(self.morelink_session_file):
@@ -178,27 +178,17 @@ class MoreLinkClient:
             logger.error("登陆失败")
             return None
 
-    def dahuodingdan_all_data(self, start_date: str = None, end_date: str = None):
+    def dahuodingdan_all_data(self):
         """获取最近1个月的大货订单的数据
 
         Returns:
             list: _description_
         """
         url = "https://morelink56.com/Common/IDATA?type=dsjson&proc=Web_Select_BigWaybill_Back2_10849"
-        if end_date is None:
-            end_date = datetime.now()
-        if start_date is None:
-            start_date = end_date - relativedelta(months=2)
-
-        if isinstance(end_date, str):
-            end_date_str = end_date
-        else:
-            end_date_str = end_date.strftime("%Y-%m-%d")
-
-        if isinstance(start_date, str):
-            start_date_str = start_date
-        else:
-            start_date_str = start_date.strftime("%Y-%m-%d")
+        end_date = datetime.now()
+        start_date = end_date - relativedelta(months=1)
+        end_date_str = end_date.strftime("%Y-%m-%d")
+        start_date_str = start_date.strftime("%Y-%m-%d")
         payload = {
             "otype": "",
             "timetype": "createtime",
@@ -206,66 +196,6 @@ class MoreLinkClient:
             "endtime": end_date_str,
             "Supplier_DS": "",
             "Consignor": "",
-            "orderStatus": "",
-        }
-
-        encoded_data = urllib.parse.urlencode(payload)
-        client = self.httpx_client
-        response = client.post(url=url, data=encoded_data, timeout=30)
-
-        if response.status_code == 200:
-            try:
-                json_data = response.json()[0]["tb"]
-                return json_data
-            except (IndexError, KeyError) as e:
-                print(f"Error parsing JSON data: {e}-{response.json()}")
-                return None
-        else:
-            print(f"HTTP error: {response.status_code}")
-            return None
-
-    def dahuodingdan_worknum_search_httpx(
-        self, numberno: str, signtype: str, start_date: str = None, end_date: str = None
-    ):
-        """Query data of big waybill using the provided numberno and signtype.
-
-        Args:
-            numberno (str): The order number.
-            signtype (str): The query type: 提单号，工作单号，多单号
-            client (httpx.Client): HTTPX client instance.
-
-        Returns:
-            dict: JSON data if successful, None otherwise.
-        """
-        url = "https://morelink56.com/Common/IDATA?type=dsjson&proc=Web_Select_BigWaybill_Back2_10849"
-
-        if start_date is None:
-            start_date = datetime.now() - relativedelta(months=1)
-            start_date_str = start_date.strftime("%Y-%m-%d")
-        if end_date is None:
-            end_date = datetime.now()
-            end_date_str = end_date.strftime("%Y-%m-%d")
-
-        if isinstance(start_date, str):
-            start_date_str = start_date
-        else:
-            start_date_str = start_date.strftime("%Y-%m-%d")
-
-        if isinstance(end_date, str):
-            end_date_str = end_date
-        else:
-            end_date_str = end_date.strftime("%Y-%m-%d")
-
-        payload = {
-            "otype": "",
-            "timetype": "createtime",
-            "starttime": start_date_str,
-            "endtime": end_date_str,
-            "Supplier_DS": "",
-            "Consignor": "",
-            "numberNo": numberno,
-            "more": "1",
-            "signtype": signtype,
             "orderStatus": "",
         }
 
@@ -278,13 +208,237 @@ class MoreLinkClient:
                 json_data = response.json()[0]["tb"]
                 return json_data
             except (IndexError, KeyError) as e:
-                print(f"Error parsing JSON data: {e}-{response.json()}")
+                print(f"Error parsing JSON data: {e}")
                 return None
         else:
             print(f"HTTP error: {response.status_code}")
             return None
 
-    def zongdan_api_httpx(self, start_date: str = None, end_date: str = None):
+    def dahuodingdan_worknum_search_httpx(self, numberno: str, signtype: str):
+        """Query data of big waybill using the provided numberno and signtype.
+
+        Args:
+            numberno (str): The order number.
+            signtype (str): The query type: 提单号，工作单号，多单号
+            client (httpx.Client): HTTPX client instance.
+
+        Returns:
+            dict: JSON data if successful, None otherwise.
+        """
+        url = "https://morelink56.com/Common/IDATA?type=dsjson&proc=Web_Select_BigWaybill_Back2_10849"
+
+        end_date = datetime.now()
+        start_date = end_date - relativedelta(years=1)
+        end_date_str = end_date.strftime("%Y-%m-%d")
+        start_date_str = start_date.strftime("%Y-%m-%d")
+
+        payload = {
+            "otype": "",
+            "timetype": "createtime",
+            "starttime": start_date_str,
+            "endtime": end_date_str,
+            "Supplier_DS": "",
+            "Consignor": "",
+            "numberNo": numberno.strip(","),
+            "more": "1",
+            "signtype": signtype,
+            "orderStatus": "",
+        }
+
+        encoded_data = urllib.parse.urlencode(payload)
+        client = self.httpx_client
+        response = client.post(url=url, data=encoded_data, timeout=120)
+
+        if response.status_code == 200:
+            try:
+                json_data = response.json()[0]["tb"]
+                return json_data
+            except (IndexError, KeyError) as e:
+                print(f"Error parsing JSON data: {e}")
+                return None
+        else:
+            print(f"HTTP error: {response.status_code}")
+            return None
+
+    def dahuodingdan_worknum_search_httpx_batch(
+        self,
+        numberno: str,
+        signtype: str,
+        batch_size: int = 10,
+        max_workers: int = 3,
+        retry_times: int = 2,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """批处理查询大订单数据，优化大量订单号的查询性能
+
+        将大量订单号分批处理，避免单次请求超时问题
+
+        Args:
+            numberno (str): 订单号字符串，支持逗号分隔
+            signtype (str): 查询类型：提单号，工作单号，多单号
+            batch_size (int): 每批处理的订单号数量，默认10个
+            max_workers (int): 最大并发线程数，默认3个
+            retry_times (int): 失败重试次数，默认2次
+
+        Returns:
+            List[Dict[str, Any]]: 合并后的所有批次查询结果，失败返回None
+        """
+        # 解析订单号
+        numbers = [num.strip() for num in numberno.strip().split(",") if num.strip()]
+
+        if not numbers:
+            logger.warning("没有有效的订单号")
+            return None
+
+        # 如果订单号数量较少，直接使用原方法
+        if len(numbers) <= batch_size:
+            logger.info(f"订单号数量较少({len(numbers)}个)，使用单次查询")
+            return self._execute_single_batch(numbers, signtype)
+
+        # 分批处理
+        batches = self._create_batches(numbers, batch_size)
+        logger.info(
+            f"总共{len(numbers)}个订单号，分为{len(batches)}批处理，每批最多{batch_size}个"
+        )
+
+        all_results = []
+        failed_batches = []
+
+        # 使用线程池并发处理批次
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有批次任务
+            future_to_batch = {
+                executor.submit(
+                    self._execute_single_batch_with_retry, batch, signtype, retry_times
+                ): batch
+                for batch in batches
+            }
+
+            # 收集结果
+            for future in as_completed(future_to_batch):
+                batch = future_to_batch[future]
+                try:
+                    result = future.result()
+                    if result:
+                        all_results.extend(result)
+                        logger.info(f"批次处理成功，获得{len(result)}条记录")
+                    else:
+                        failed_batches.append(batch)
+                        logger.warning(f"批次处理失败: {batch}")
+                except Exception as e:
+                    failed_batches.append(batch)
+                    logger.error(f"批次处理异常: {batch}, 错误: {e}")
+
+        # 如果有失败的批次，尝试使用更小的批次大小重试
+        if failed_batches:
+            logger.info(f"有{len(failed_batches)}个批次失败，尝试减小批次大小重试")
+            smaller_batch_size = max(3, batch_size // 2)
+            failed_batches = self._retry_failed_batches(
+                failed_batches, signtype, smaller_batch_size, retry_times
+            )
+
+        logger.info(f"批处理完成，总共获得{len(all_results)}条记录")
+        return all_results if all_results else None
+
+    def _create_batches(self, numbers: List[str], batch_size: int) -> List[List[str]]:
+        """将订单号列表分批"""
+        batches = []
+        for i in range(0, len(numbers), batch_size):
+            batch = numbers[i : i + batch_size]
+            batches.append(batch)
+        return batches
+
+    def _execute_single_batch_with_retry(
+        self, batch: List[str], signtype: str, retry_times: int
+    ) -> Optional[List[Dict[str, Any]]]:
+        """执行单批次查询，支持重试"""
+        numberno_str = ",".join(batch)
+
+        for attempt in range(retry_times + 1):
+            try:
+                result = self._execute_single_batch(batch, signtype)
+                if result:
+                    return result
+                else:
+                    logger.warning(f"批次查询第{attempt + 1}次尝试失败")
+            except Exception as e:
+                logger.error(f"批次查询第{attempt + 1}次尝试异常: {e}")
+
+            if attempt < retry_times:
+                time.sleep(1)  # 重试前等待1秒
+
+        return None
+
+    def _execute_single_batch(
+        self, batch: List[str], signtype: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """执行单批次查询的内部方法"""
+        url = "https://morelink56.com/Common/IDATA?type=dsjson&proc=Web_Select_BigWaybill_Back2_10849"
+
+        end_date = datetime.now()
+        start_date = end_date - relativedelta(years=1)
+        end_date_str = end_date.strftime("%Y-%m-%d")
+        start_date_str = start_date.strftime("%Y-%m-%d")
+
+        payload = {
+            "otype": "",
+            "timetype": "createtime",
+            "starttime": start_date_str,
+            "endtime": end_date_str,
+            "Supplier_DS": "",
+            "Consignor": "",
+            "numberNo": ",".join(batch),
+            "more": "1",
+            "signtype": signtype,
+            "orderStatus": "",
+        }
+
+        encoded_data = urllib.parse.urlencode(payload)
+        client = self.httpx_client
+
+        try:
+            response = client.post(url=url, data=encoded_data, timeout=60)
+
+            if response.status_code == 200:
+                try:
+                    json_data = response.json()[0]["tb"]
+                    return json_data if isinstance(json_data, list) else [json_data]
+                except (IndexError, KeyError) as e:
+                    logger.error(f"解析JSON数据错误: {e}")
+                    return None
+            else:
+                logger.error(f"HTTP错误: {response.status_code}")
+                return None
+        except httpx.TimeoutException:
+            logger.error(f"批次查询超时: {batch}")
+            raise
+        except Exception as e:
+            logger.error(f"批次查询异常: {e}")
+            raise
+
+    def _retry_failed_batches(
+        self,
+        failed_batches: List[List[str]],
+        signtype: str,
+        smaller_batch_size: int,
+        retry_times: int,
+    ) -> List[List[str]]:
+        """重新处理失败的批次"""
+        still_failed = []
+
+        for failed_batch in failed_batches:
+            # 将失败的批次进一步拆分
+            sub_batches = self._create_batches(failed_batch, smaller_batch_size)
+
+            for sub_batch in sub_batches:
+                result = self._execute_single_batch_with_retry(
+                    sub_batch, signtype, retry_times
+                )
+                if not result:
+                    still_failed.append(sub_batch)
+
+        return still_failed
+
+    def zongdan_api_httpx(self):
         """Retrieve data of zongdan for the last year.
 
         Args:
@@ -294,17 +448,12 @@ class MoreLinkClient:
             list: List of JSON data if successful, None otherwise.
         """
         zongdan_list_url = "https://morelink56.com/Common/IDATA?type=list&proc=Web_Select_zginfo_cp_10849"
-        if end_date is None:
-            end_date = datetime.now()
-            end_date_str = end_date.strftime("%Y-%m-%d")
-        else:
-            end_date_str = end_date
 
-        if start_date is None:
-            start_date = datetime.now() - relativedelta(years=1)
-            start_date_str = start_date.strftime("%Y-%m-%d")
-        else:
-            start_date_str = start_date
+        end_date = datetime.now()
+        start_date = end_date - relativedelta(years=1)
+        end_date_str = end_date.strftime("%Y-%m-%d")
+        start_date_str = start_date.strftime("%Y-%m-%d")
+
         zongdan_payload = {
             "orderStatus": "",
             "loadingtype": "",
@@ -318,7 +467,7 @@ class MoreLinkClient:
         encoded_payload = urllib.parse.urlencode(zongdan_payload)
         client = self.httpx_client
 
-        response = client.post(url=zongdan_list_url, data=encoded_payload, timeout=30)
+        response = client.post(url=zongdan_list_url, data=encoded_payload, timeout=60)
 
         if response.status_code == 200:
             try:
@@ -355,48 +504,7 @@ class MoreLinkClient:
 
         fba_warehouse_res = client.post(url=fba_warehoust_url)
         if fba_warehouse_res.status_code == 200:
-            return fba_warehouse_res.json()["rows"]
-
-    def search_warehouse_size(self, sono: str, cid: str):
-        search_url = (
-            "https://morelink56.com/Common/IDATA?type=fun&proc=bll.goodssize.cargo_size"
-        )
-        search_payload = {"sono": sono, "cid": cid}
-
-        # 将字典转换为查询字符串
-        search_payload_encoded = urllib.parse.urlencode(search_payload)
-
-        # 构建完整的 URL
-        full_search_url = f"{search_url}&{search_payload_encoded}"
-
-        # 使用完整的 URL 作为 url 参数
-        res = self.httpx_client.post(
-            url=full_search_url, content=search_payload_encoded
-        )
-        if res.status_code == 200 and res.json()["success"]:
-            return res.json()
-
-    def get_dahuo_data_by_id(self, worknum: str):
-        """根据工作单号获取大货订单数据
-
-        Args:
-            worknum (str): 工作单号
-
-        Returns:
-            _type_: _description_
-        """
-
-        url = "https://morelink56.com/Common/IDATA?type=dsjson&proc=Web_Select_BigWaybill_ByID"
-
-        payload = {"operNo": worknum}
-
-        encoded_payload = urllib.parse.urlencode(payload)
-        client = self.httpx_client
-        response = client.post(url=url, data=encoded_payload)
-        if response.status_code == 200:
-            return response.json()[0]["tb"][0]
-        else:
-            return None
+            return fba_warehouse_res.json()
 
     @staticmethod
     def zongdan_filter_json_data(data_list, orderno=None, billno=None):

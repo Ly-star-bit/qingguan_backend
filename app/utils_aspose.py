@@ -31,7 +31,7 @@ from Aspose.Cells import (
     TextAlignmentType,
     SaveFormat,
 )
-from Aspose.Cells.Rendering import PdfCompliance
+from Aspose.Cells.Rendering import PdfCompliance, SheetSet
 
 # 设置许可证
 license_path = os.path.join(aspose_dir, "Aspose.Total.NET.lic")
@@ -627,18 +627,24 @@ class AsposeCellsNETHandler:
             else:
                 set_cell_value_internal(shenzhn_sheet, 50, 13, "系统未录入")
 
+            output_sheet_name = "S#-SZ-customs"
             ids = []
             for i in wb.Worksheets:
                 origin_sheetname = i.Name
-                if origin_sheetname == "S#-SZ-customs":
+                if origin_sheetname == output_sheet_name:
                     ids.append(i.Index)
 
-            # 注意：SheetSet的使用方式可能需要调整，这里简化处理
-            # new_SheetSet = SheetSet(ids)
+            # 检查是否找到了需要导出的工作表
+            if not ids:
+                # 如果没有找到指定名称的工作表，使用第一个工作表
+                ids = [0] if wb.Worksheets.Count > 0 else []
+
+            # 如果没有找到任何工作表，使用第一个工作表
+            new_SheetSet = SheetSet(ids) if ids else SheetSet([0])
 
             # 配置PDF保存选项
             saveOption = PdfSaveOptions()
-            # saveOption.SheetSet = new_SheetSet
+            saveOption.SheetSet = new_SheetSet
             # 确保每个工作表单独保存为一个PDF页面
             saveOption.OnePagePerSheet = True
 

@@ -14,6 +14,7 @@ import sqlite3
 import traceback
 import shutil
 import time
+import zipfile
 import pandas as pd
 import httpx
 from morelink_api import MoreLinkClient
@@ -36,7 +37,7 @@ import share
 load_dotenv()
 
 # 自定义处理器，用于在日志记录时发送邮件
-logger.level("ALERT", no=25, color="<red><bold>", icon="⚠️")
+
 # os.environ["PLAYWRIGHT_BROWSERS_PATH"] = r"C:\Users\Administrator\AppData\Local\ms-playwright"
 
 
@@ -381,7 +382,7 @@ class UPSRoyalDadan:
             already_data_list = already_data_res.json()["data"]["list"]
         if already_data_list:
             # 根目录路径
-            root_path = Path(f"file/ups_pdf_file/{time.time()}")
+            root_path = Path(f"file/tools_auto/ups_pdf_file/{time.time()}")
             # 创建根目录（如果不存在）
             root_path.mkdir(parents=True, exist_ok=True)
             return_data = []
@@ -445,8 +446,19 @@ class UPSRoyalDadan:
                     original_pdf_path = root_path / f"{uncropped_file}.pdf"
                     crop_pdf_path = root_path / "crop" / f"{uncropped_file}.pdf"
                     shutil.copy(original_pdf_path, crop_pdf_path)
-        # 最后返回customerOrderNo和deliveryNo
 
+                # 打包PDF文件夹为zip
+                crop_path = root_path / "crop"
+                if crop_path.exists() and any(crop_path.glob("*.pdf")):
+                    # 创建zip文件
+                    zip_path = f"{root_path}.zip"
+                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                        for pdf_file in crop_path.glob("*.pdf"):
+                            zipf.write(pdf_file, pdf_file.name)
+                    logger.info(f"PDF已打包为: {zip_path}")
+                    return return_data, zip_path
+
+        # 最后返回customerOrderNo和deliveryNo
         return return_data, root_path
 
     def get_yubao_data(self, client_num_list: list):
@@ -918,10 +930,10 @@ def generate_tempalte_file(excel_content, is_binary=True):
     all_warehouse_info = morelink_client.fba_warehouse_search()
 
     # dahuo_res = morelink_client.dahuodingdan_worknum_search_httpx(
-    #     numberno=a_num, signtype="多单号"
+    #     numberno=a_num, signtype="工作单号"
     # )
     dahuo_res = morelink_client.dahuodingdan_worknum_search_httpx_batch(
-        numberno=a_num, signtype="多单号"
+        numberno=a_num, signtype="工作单号"
     )
     exists_CourierNumber_worknum = []
 
@@ -944,7 +956,7 @@ def generate_tempalte_file(excel_content, is_binary=True):
         work_num_df, on="operNo", how="left", suffixes=("", "_excel")
     )
     df_merged = df_merged.fillna("")
-    output_path = rf"./file/ups_excel_file/{work_num_df['operNo'].to_list()[0]}.xlsx"
+    output_path = rf"./file/tools_auto/{work_num_df['operNo'].to_list()[0]}.xlsx"
     all_box_num_template = r"尾程快递-多票批量导入-按总箱数 (1).xlsx"
 
     write_data_to_template(
@@ -1296,19 +1308,37 @@ def work_num_dadan_main(excel_content, is_binary=True, progress_callback=None):
 
                 logger.info("开始尝试预报，处理那些没有预报的内容")
                 notify_progress("预报", "running", "正在进行预报...")
-                ups_royal.forecast(upload_file_path)
+                forecast_list = ups_royal.forecast(upload_file_path)
                 todos["预报"] = "完成(已经上传过一次，pass)"
                 notify_progress("预报", "completed", "预报完成")
 
-                logger.info("已经上传过一次，但是没有返回具体的文件，尝试打印")
+                logger.info("已经上传过一次，获取打印数据")
                 notify_progress("打印", "running", "正在打印面单...")
-                root_path, new_file_path = print_huitian(upload_file_path, ups_royal)
+
+                # 获取已预报的客户单号
+                if forecast_list:
+                    customerOrderNos = ",".join(
+                        [item["customerOrderNo"] for item in forecast_list]
+                    )
+                else:
+                    # 如果预报没有返回，从上传文件中读取客户单号
+                    upload_file_pd = pd.read_excel(upload_file_path, skiprows=4)
+                    customerOrderNos = ",".join(
+                        upload_file_pd["客户单号/入库单号"].tolist()
+                    )
+
+                # 执行打印，获取打印数据
+                huitian_data, root_path = (
+                    ups_royal.print_already_yubao_get_tracking_num(
+                        customerOrderNos=customerOrderNos
+                    )
+                )
                 todos["打印"] = "完成"
                 notify_progress("打印", "completed", "打印完成")
 
-                todos["回填"] = "完成(由打印流程触发)"
+                todos["回填"] = "完成(由后台定时任务处理)"
                 logger.info(f"[TODO] 状态: {todos}")
-                # 打印完成后立即返回，不执行回填
+                # 打印完成后立即返回，回填数据作为返回值，由后台定时任务处理回填
                 return (
                     exists_CourierNumber_worknum,
                     root_path,
@@ -1410,7 +1440,7 @@ def work_num_dadan_main(excel_content, is_binary=True, progress_callback=None):
 
         # 创建 DataFrame
         new_df = pd.DataFrame(new_data, columns=columns)
-        new_file_path = f"file/ups_excel_file/template_整柜{time.time()}.xlsx"
+        new_file_path = f"file/tools_auto/template_整柜{time.time()}.xlsx"
         # 保存为新的 Excel 文件
         new_df.to_excel(new_file_path, index=False)
         notify_progress("生成Excel", "completed", "Excel文件生成完成")
@@ -1512,7 +1542,7 @@ def print_huitian(excel_content, ups_royal=None):
 
         # 创建 DataFrame
         new_df = pd.DataFrame(new_data, columns=columns)
-        new_file_path = f"file/ups_excel_file/template_整柜{time.time()}.xlsx"
+        new_file_path = f"file/tools_auto/template_整柜{time.time()}.xlsx"
         # 保存为新的 Excel 文件
         new_df.to_excel(new_file_path, index=False)
     finally:
@@ -1536,8 +1566,14 @@ def print_huitian(excel_content, ups_royal=None):
 
 
 if __name__ == "__main__":
+    import sys
+    import asyncio
+
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
     work_num_dadan_main(
-        excel_content=r"C:\Users\a1337\Desktop\工作单号打单.xlsx",
+        excel_content=r"C:\Users\a1337\Desktop\morelink_worknum_dadan.xlsx-1766128806.7280135.xlsx",
         is_binary=False,
     )
     # ups_royal = UPSRoyalDadan()

@@ -1,10 +1,15 @@
 import json
 import os
 import subprocess
+import sys
+import asyncio
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from tracemalloc import start
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 import httpx
 import jpype
@@ -51,10 +56,15 @@ from morelink_output_excel_client import morelink_get_operNo
 from rpa_tools import find_playwright_node_path
 from rpa_tools.email_tools import send_email
 from fastapi.openapi.utils import get_openapi
+from loguru import logger
 
 # "yu.luo@hubs-scs.com,op_sea@hubs-scs.com"
 receiver_emial = "op_sea@hubs-scs.com"
-logger.level("ALERT", no=35, color="<red>")
+try:
+    logger.level("ALERT", no=35, color="<red>")
+except TypeError:
+    # 级别已存在
+    pass
 
 
 # 定义过滤器函数，用于分离不同logger的日志
@@ -311,7 +321,7 @@ def get_latest_usd_cny_rate():
             data = response.json()
 
             if not data:
-                print("❌ API返回空数据")
+                task_logger.info("❌ API返回空数据")
                 return None
             session = next(get_session())
             db = session
@@ -327,12 +337,12 @@ def get_latest_usd_cny_rate():
             # 四舍五入保留2位小数
             rate_value = round(latest_rate["value"], 4)
 
-            print("📈 最新的USD/CNY汇率信息:")
-            print(f"   汇率: {rate_value}")
-            print(f"   时间: {readable_time}")
-            print(f"   源货币: {latest_rate['source']}")
-            print(f"   目标货币: {latest_rate['target']}")
-            print(f"   时间戳: {latest_rate['time']}")
+            task_logger.info("📈 最新的USD/CNY汇率信息:")
+            task_logger.info(f"   汇率: {rate_value}")
+            task_logger.info(f"   时间: {readable_time}")
+            task_logger.info(f"   源货币: {latest_rate['source']}")
+            task_logger.info(f"   目标货币: {latest_rate['target']}")
+            task_logger.info(f"   时间戳: {latest_rate['time']}")
 
             # 更新数据库中的汇率信息
             db.exchange_rates.update_one(
@@ -341,20 +351,20 @@ def get_latest_usd_cny_rate():
                 upsert=True,
             )
 
-            print("✅ 汇率信息已更新到数据库")
+            task_logger.info("✅ 汇率信息已更新到数据库")
             return latest_rate
 
     except httpx.RequestError as e:
-        print(f"❌ 请求错误: {e}")
+        task_logger.info(f"❌ 请求错误: {e}")
         return None
     except httpx.HTTPStatusError as e:
-        print(f"❌ HTTP错误: {e}")
+        task_logger.info(f"❌ HTTP错误: {e}")
         return None
     except json.JSONDecodeError as e:
-        print(f"❌ JSON解析错误: {e}")
+        task_logger.info(f"❌ JSON解析错误: {e}")
         return None
     except Exception as e:
-        print(f"❌ 未知错误: {e}")
+        task_logger.info(f"❌ 未知错误: {e}")
         return None
 
 

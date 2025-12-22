@@ -42,4 +42,5 @@ dependencies = [
     "pythonnet>=3.0.5",
     "pulp>=3.3.0",
     "sse-starlette>=3.0.2",
+    "pymupdf>=1.26.7",
 ]

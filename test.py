@@ -17,7 +17,7 @@ from morelink_api import MoreLinkClient
 from rpa_tools import find_playwright_node_path
 from rpa_tools.email_tools import send_email
 
-receiver_emial = "op_sea@hubs-scs.com"
+receiver_emial = "yuluo@hubs-scs.com"
 try:
     logger.level("ALERT", no=35, color="<red>")
 except TypeError:
@@ -149,7 +149,6 @@ def cron_job():
             continue
     # 获取 ShipmentLog 数据
     request_data_list = list(db.shipment_logs.find({"status": 0}))
-
     if not request_data_list:
         task_logger.info("没有需要处理的任务")
         return
@@ -195,5 +194,5 @@ def cron_job():
 
 
 if __name__ == "__main__":
-    # cron_job()
-    get_latest_usd_cny_rate()
+    cron_job()
+    # get_latest_usd_cny_rate()

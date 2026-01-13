@@ -222,6 +222,9 @@ class AsposeCellsNETHandler:
                 self.set_cell_value(pl_sheet, 5, 9, doc_number)
                 self.set_cell_value(pl_sheet, 6, 9, doc_number)
                 self.set_cell_value(pl_sheet, 7, 9, datetime.now().strftime("%Y/%m/%d"))
+                if data[0]["export_country"] == "Vietnam":
+                    self.set_cell_value(pl_sheet,8, 9, "MADE IN VIETNAM")
+                    self.set_cell_value(civ_sheet, 9, 9, "MADE IN VIETNAM")
 
                 if data[0]["execute_type"] == "Sea":
                     self.set_cell_value(civ_sheet, 9, 2, "")

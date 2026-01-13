@@ -655,7 +655,9 @@ def get_fill_data(
         #     data.append((6, "FedEx-CA03"))
         data.append((6, "FedEx-CA03"))
         # 转换州二字码
-        file_path = "美国州省二字码.xlsx"  # 替换为你的Excel文件路径
+        file_path = (
+            "./file/excel_template/美国州省二字码.xlsx"  # 替换为你的Excel文件路径
+        )
         state_name = receipt_data["province"]  # 替换为你要查询的州名英文
         abbreviation = get_state_abbreviation(file_path, state_name)
         if abbreviation == "未找到对应的州名缩写":
@@ -665,7 +667,9 @@ def get_fill_data(
         if int(origin_weight * 2.2) > 20 and int(weight * 2.2) < 20:
             weight = 9
             # 转换州二字码
-        file_path = "美国州省二字码.xlsx"  # 替换为你的Excel文件路径
+        file_path = (
+            "./file/excel_template/美国州省二字码.xlsx"  # 替换为你的Excel文件路径
+        )
         state_name = receipt_data["province"]  # 替换为你要查询的州名英文
         abbreviation = get_state_abbreviation(file_path, state_name)
         if abbreviation == "未找到对应的州名缩写":
@@ -957,7 +961,9 @@ def generate_tempalte_file(excel_content, is_binary=True):
     )
     df_merged = df_merged.fillna("")
     output_path = rf"./file/tools_auto/{work_num_df['operNo'].to_list()[0]}.xlsx"
-    all_box_num_template = r"尾程快递-多票批量导入-按总箱数 (1).xlsx"
+    all_box_num_template = (
+        r"./file/excel_template/尾程快递-多票批量导入-按总箱数 (1).xlsx"
+    )
 
     write_data_to_template(
         all_box_num_template,

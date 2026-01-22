@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from tracemalloc import start
 
+from app.tools_auto.utils.hubs.hubs_client import HubsClient
+
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
@@ -237,29 +239,94 @@ def cron_job():
     if not request_data_list:
         task_logger.info("没有需要处理的任务")
         return
+
+    # 初始化 Hubs 客户端和端口映射
+    hubs_client = HubsClient()
+    today = datetime.now()
+    one_month_ago = today - timedelta(days=30)
+    s_date = one_month_ago.strftime("%Y-%m-%d")
+    e_date = today.strftime("%Y-%m-%d")
+    hubs_payload = {"pageindex":1,"pagesize":200,"open_search":False,"sorts":[],"s_date":s_date,"e_date":e_date,"transport_type":"海运","sel_type":"operno","ids":[],"searchlist":[]}
+    hubs_zongdan_data_res = hubs_client.httpx_client.post("https://admin.hubs-scs.com/api/v1/oms/oms_zginfo/getlist",json=hubs_payload)
+    hubs_zongdan_data = hubs_zongdan_data_res.json()
+    
+    if not hubs_zongdan_data.get("code") == 200 or not hubs_zongdan_data.get("data"):
+        hubs_data_list = []
+    else:
+        hubs_data_list = hubs_zongdan_data['data']['list']
+    
+    # 获取端口映射
+    port_payload = {"keyword":"","pageindex":1,"pagesize":100,"transport_type":"海运"}
+    hubs_port_res = hubs_client.httpx_client.post("https://admin.hubs-scs.com/api/v1/pom/base_port/getcomponentlist",json=port_payload)
+    hubs_port_data = hubs_port_res.json()
+    port_code_full_english_name_mapping = dict()
+    if hubs_port_data.get("data") and hubs_port_data["data"].get("list"):
+        for port in hubs_port_data['data']['list']:
+            port_code_full_english_name_mapping[port['port_code']] = port['port_name_yw']
+    
+    # 初始化 Morelink 客户端
     node_path = find_playwright_node_path()
     morelink_client = MoreLinkClient(node_path)
-    data = morelink_client.zongdan_api_httpx()
+    morelink_data = morelink_client.zongdan_api_httpx()
 
+    hubs_field_mapping = {
+        "hbl_no": "hblno",
+        "pol": "startland",
+        "pod2": "destination",
+        "vsl_voy": "flight",
+        "cabinet_type": "cabinettype",
+        "seal_no": "sealno",
+        "atd": "ATD",
+        "cntr_no":"cabinetNo"
+    }
+    
+    morelink_field_mapping = {
+        "billno": "hblno",
+        "startland": "startland",
+        "destination": "destination",
+        "flight": "flight",
+        "cabinetNo": "cabinetNo",
+        "sealno": "sealno",
+        "ATD": "ATD",
+    }
+    
     for request_data in request_data_list:
         try:
-            filter_data = [
-                row
-                for row in data
-                if row.get("billno") == request_data["master_bill_no"].strip()
-            ]
-
+            master_bill_no = request_data["master_bill_no"].strip()
+            filter_data = []
+            source_system = None
+            
+            # 先从 Hubs 新系统查询
+            filter_data = [i for i in hubs_data_list if i['bl_no'] == master_bill_no]
+            if filter_data:
+                source_system = "hubs"
+                field_mapping = hubs_field_mapping
+            else:
+                # 从 Morelink 旧系统查询
+                filter_data = [row for row in morelink_data if row.get("billno") == master_bill_no]
+                if filter_data:
+                    source_system = "morelink"
+                    field_mapping = morelink_field_mapping
+            
+            mapped_data = []
+            for item in filter_data:
+                mapped_item = {field_mapping.get(k, k): v for k, v in item.items()}
+                if source_system == "hubs":
+                    mapped_item['startland'] = port_code_full_english_name_mapping.get(mapped_item.get('startland'), mapped_item.get('startland'))
+                    mapped_item['destination'] = port_code_full_english_name_mapping.get(mapped_item.get('destination'), mapped_item.get('destination'))
+                mapped_data.append(mapped_item)
+            
             if not filter_data:
                 task_logger.log(
                     "ALERT",
-                    f"海运清关提单pdf-总单列表提单号搜索不到：{request_data['master_bill_no']}",
+                    f"海运清关提单pdf-总单列表提单号搜索不到：{master_bill_no}",
                 )
                 db.shipment_logs.update_one(
                     {"_id": request_data["_id"]}, {"$set": {"status": -1}}
                 )
                 continue
-
-            pdf_file = shenzhen_customes_pdf_gennerate(request_data, filter_data[0])
+            
+            pdf_file = shenzhen_customes_pdf_gennerate(request_data, mapped_data[0])
             task_logger.info(f"已生成pdf文件->{pdf_file}")
             send_email(
                 receiver_email=receiver_emial,
@@ -296,7 +363,7 @@ def morelink_get_operNo_cron():
 @scheduler.scheduled_job("interval", minutes=20)
 def work_num_backfilling_job():
     """工作单号回填定时任务"""
-    from app.tools_auto.work_num_dadan import execute_backfilling
+    from app.tools_auto.utils.dadan.work_num_dadan import execute_backfilling
 
     try:
         execute_backfilling()

@@ -9,7 +9,10 @@ from loguru import logger
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from app.tools_auto.product_name_excel_processor import find_matching_products
-from app.tools_auto.work_num_dadan import work_num_dadan_main
+from app.tools_auto.utils.dadan.work_num_dadan import work_num_dadan_main
+from app.tools_auto.utils.hubs.hubs_client import HubsClient
+from app.tools_auto.utils.hubs.lasen_huitian import process_excel_to_json2
+import pandas as pd
 
 # 定义路由
 tool_auto_router = APIRouter(tags=["工具自动化"], prefix="/tools_auto")
@@ -133,6 +136,15 @@ async def get_tasks():
             "id": "work_num_dadan_task_001",
             "title": "工作单号打单",
             "apiEndpoint": "/tools_auto/work_num_dadan",
+            "enableFileUpload": True,
+            "enableApiParams": False,
+            "downloadBaseUrl": "/tools_auto/download",
+            "apiParams": {},
+        },
+        {
+            "id": "larsen_backfill_task_001",
+            "title": "拉森大货运单回填",
+            "apiEndpoint": "/tools_auto/larsen/backfill",
             "enableFileUpload": True,
             "enableApiParams": False,
             "downloadBaseUrl": "/tools_auto/download",
@@ -419,7 +431,7 @@ async def work_num_dadan(
 
             # 8. 在后台保存回填数据，等待定时任务处理
             if huitian_data:
-                from app.tools_auto.work_num_dadan import save_backfilling_data
+                from app.tools_auto.utils.dadan.work_num_dadan import save_backfilling_data
 
                 await loop.run_in_executor(
                     executor,
@@ -480,3 +492,244 @@ async def download_file(file_path: str):
         filename=target_path.name,
         media_type="application/octet-stream",
     )
+
+
+@tool_auto_router.post("/larsen/backfill")
+async def larsen_backfill(
+    file: UploadFile = File(..., description="拉森回填Excel文件"),
+):
+    """
+    拉森系统大货运单回填处理
+    通过 SSE 返回执行过程，逐条回填数据
+
+    Excel文件格式要求（参考 lasen_huitian.py）：
+    - 仓库、发货批次、箱数、总实重、总箱数、进仓号 等列
+
+    Args:
+        file: 拉森回填Excel文件
+
+    Returns:
+        EventSourceResponse: SSE流式响应，每条数据回填后立即返回进度
+    """
+    task_id = str(uuid.uuid4())
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    safe_filename = "".join(
+        c if c.isalnum() or c in "._-" else "_" for c in file.filename
+    )
+    name_stem = Path(safe_filename).stem
+    suffix = Path(safe_filename).suffix
+    saved_filename = f"larsen_backfill_{name_stem}_{timestamp}{suffix}"
+    saved_file_path = BASE_UPLOAD_DIR / saved_filename
+
+    content = await file.read()
+    # 将文件指针重置到开头（如果需要再次读取）
+    await file.seek(0)
+    with open(saved_file_path, "wb") as f:
+        f.write(content)
+
+    async def event_generator():
+        progress_queue = asyncio.Queue()
+        main_loop = asyncio.get_running_loop()
+
+        def progress_callback(index, status, message, have_no=None, data=None):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    progress_queue.put((index, status, message, have_no, data)), main_loop
+                )
+            except Exception as e:
+                logger.error(f"进度回调错误: {e}")
+
+        try:
+            step_info = {
+                "id": task_id,
+                "step": 1,
+                "task_name": "拉森大货运单回填处理",
+            }
+            yield {"data": json.dumps(step_info, ensure_ascii=False)}
+
+            status_update = {
+                "task": task_id,
+                "status": "running",
+                "message": "文件已成功保存，正在读取数据...",
+            }
+            yield {
+                "event": "status",
+                "data": json.dumps(status_update, ensure_ascii=False),
+            }
+
+            try:
+                client = HubsClient()
+                if not client.httpx_client:
+                    raise Exception("无法获取Hubs客户端，请检查登录配置")
+            except Exception as e:
+                error_msg = f"初始化Hubs客户端失败: {str(e)}"
+                logger.error(error_msg)
+                error_result = {
+                    "task": task_id,
+                    "result": {"error": error_msg},
+                    "message": error_msg,
+                }
+                yield {
+                    "event": "result",
+                    "data": json.dumps(error_result, ensure_ascii=False),
+                }
+                return
+
+            try:
+                all_fbx_address = client.get_base_fbx_addr()
+                data_list = process_excel_to_json2(content, is_binary=True, all_fbx_address=all_fbx_address)
+                total_rows = len(data_list)
+                if total_rows == 0:
+                    raise ValueError("Excel处理后无有效数据")
+            except Exception as e:
+                error_msg = f"处理Excel文件失败: {str(e)}"
+                logger.error(error_msg)
+                error_result = {
+                    "task": task_id,
+                    "result": {"error": error_msg},
+                    "message": error_msg,
+                }
+                yield {
+                    "event": "result",
+                    "data": json.dumps(error_result, ensure_ascii=False),
+                }
+                return
+
+            status_update = {
+                "task": task_id,
+                "status": "running",
+                "message": f"已读取 {total_rows} 条数据，开始逐条回填...",
+                "total": total_rows,
+            }
+            yield {
+                "event": "status",
+                "data": json.dumps(status_update, ensure_ascii=False),
+            }
+
+            results = []
+            success_count = 0
+            fail_count = 0
+
+            for index, data in enumerate(data_list):
+                try:
+                    have_no = data.get("order", {}).get("have_no")
+                    if not have_no:
+                        progress_callback(
+                            index + 1,
+                            "skipped",
+                            "have_no为空，跳过",
+                            have_no=None,
+                        )
+                        fail_count += 1
+                        continue
+
+                    progress_callback(
+                        index + 1,
+                        "processing",
+                        f"正在回填第 {index + 1}/{total_rows} 条，have_no: {have_no}",
+                        have_no=have_no,
+                    )
+
+                    result = client.update_bigwaybill_order([have_no], data)
+                    logger.info(f'result:{result}')
+                    logger.info(f'data:{data}')
+                    if result and result.get("success"):
+                        success_count += 1
+                        progress_callback(
+                            index + 1,
+                            "success",
+                            f"回填成功: have_no={have_no}",
+                            have_no=have_no,
+                            data=data,
+                        )
+                        results.append(
+                            {
+                                "index": index + 1,
+                                "have_no": have_no,
+                                "status": "success",
+                                "message": "回填成功",
+                            }
+                        )
+                    else:
+                        fail_count += 1
+                        error_msg = result.get("message", "未知错误") if result else "返回结果为空"
+                        progress_callback(
+                            index + 1,
+                            "failed",
+                            f"回填失败: have_no={have_no}，原因: {error_msg}",
+                            have_no=have_no,
+                        )
+                        results.append(
+                            {
+                                "index": index + 1,
+                                "have_no": have_no,
+                                "status": "failed",
+                                "message": error_msg,
+                            }
+                        )
+
+                except Exception as e:
+                    fail_count += 1
+                    error_msg = f"处理第 {index + 1} 行时出错: {str(e)}"
+                    logger.error(error_msg)
+                    progress_callback(
+                        index + 1,
+                        "failed",
+                        error_msg,
+                        have_no=str(have_no),
+                    )
+                    results.append(
+                        {
+                            "index": index + 1,
+                            "have_no": str(have_no),
+                            "status": "failed",
+                            "message": str(e),
+                        }
+                    )
+
+            status_update = {
+                "task": task_id,
+                "status": "completed",
+                "message": f"处理完成，成功 {success_count} 条，失败 {fail_count} 条",
+                "total": total_rows,
+                "success_count": success_count,
+                "fail_count": fail_count,
+            }
+            yield {
+                "event": "status",
+                "data": json.dumps(status_update, ensure_ascii=False),
+            }
+
+            result_data = {
+                "task": task_id,
+                "result": {
+                    "file_name": saved_filename,
+                    "file_path": f"tools_auto/{saved_filename}",
+                    "total": total_rows,
+                    "success_count": success_count,
+                    "fail_count": fail_count,
+                    "details": results,
+                },
+                "message": f"任务执行成功，成功 {success_count} 条，失败 {fail_count} 条",
+            }
+            yield {
+                "event": "result",
+                "data": json.dumps(result_data, ensure_ascii=False),
+            }
+
+        except Exception as e:
+            error_msg = f"任务执行失败: {str(e)}"
+            logger.exception(error_msg)
+            error_result = {
+                "task": task_id,
+                "result": {"error": error_msg},
+                "message": error_msg,
+            }
+            yield {
+                "event": "result",
+                "data": json.dumps(error_result, ensure_ascii=False),
+            }
+
+    return EventSourceResponse(event_generator())

@@ -137,7 +137,9 @@ def process_shipping_data(
     detail_data_log_list = []
 
     def safe_round(value, product_naem, default=0.0):
-        if not value or value == "/":
+        if not  value:
+            return default
+        if value == "/":
             raise ValueError(f"Product '{product_naem}' value is empty or '/'")
         try:
             return round(float(value), 4)
@@ -145,7 +147,9 @@ def process_shipping_data(
             return default
 
     def safe_float(value, product_naem, default=0.0):
-        if not value or value == "/":
+        if not  value:
+            return default
+        if value == "/":
             raise ValueError(f"Product '{product_naem}' value is empty or '/'")
         try:
             return float(value)
@@ -396,7 +400,9 @@ def process_shipping_data_canada(
     detail_data_log_list = []
 
     def safe_round(value, product_naem, default=0.0):
-        if not value or value == "/":
+        if not  value:
+            return default
+        if value == "/":
             raise ValueError(f"Product '{product_naem}' value is empty or '/'")
         try:
             return round(float(value), 4)
@@ -404,7 +410,9 @@ def process_shipping_data_canada(
             return default
 
     def safe_float(value, product_naem, default=0.0):
-        if not value or value == "/":
+        if not  value:
+            return default
+        if value == "/":
             raise ValueError(f"Product '{product_naem}' value is empty or '/'")
         try:
             return float(value)

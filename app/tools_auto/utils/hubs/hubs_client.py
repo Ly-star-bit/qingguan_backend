@@ -875,17 +875,23 @@ class HubsClient:
             logger.error(f"Unknown error while updating bigwaybill order: {e}")
             return None
 
-    def get_client_sys_customer_ship_addr(self,client_id):
-
+    def get_client_sys_customer_ship_addr(self, client_id):
         """
         获取客户的对应的上门提货地址
-        :param pagesize: Page size (default: 499)
-        :return: List of 大货运单 or None if request fails
+        :param client_id: 客户 ID
+        :return: List of 提货地址 or None if request fails
         """
         url = "https://admin.hubs-scs.com/api/v1/som/sys_customer_address/SOM/getlist"
 
         try:
-            payload = {"sorts":[],"pageindex":1,"pagesize":999,"open_search":False,"dsids":[client_id],"type":1}
+            payload = {
+                "sorts": [],
+                "pageindex": 1,
+                "pagesize": 999,
+                "open_search": False,
+                "dsids": [client_id],
+                "type": 1,
+            }
             response = self.httpx_client.post(url, json=payload)
             # response.raise_for_status()
 
@@ -893,22 +899,117 @@ class HubsClient:
             self.update_token(response.headers)
 
             if data.get("success") and "data" in data:
-                return data['data']['list']
+                return data["data"]["list"]
             else:
                 logger.error(
-                    f"Failed to get warehouses: {data.get('message', 'Unknown error')}"
+                    f"Failed to get ship addr: {data.get('message', 'Unknown error')}"
                 )
                 return None
 
         except httpx.RequestError as e:
-            logger.error(f"Request error while getting warehouses: {e}")
+            logger.error(f"Request error while getting ship addr: {e}")
             return None
         except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error while getting warehouses: {e}")
+            logger.error(f"JSON decode error while getting ship addr: {e}")
             return None
         except Exception as e:
-            logger.error(f"Unknown error while getting warehouses: {e}")
+            logger.error(f"Unknown error while getting ship addr: {e}")
             return None
+
+    def get_bigwaybill_orders_list(
+        self,
+        start_date=None,
+        end_date=None,
+        operno_list=None,
+        transport_type="全部",
+        dsid_list=None,
+        pagesize=50,
+    ):
+        """
+        通过日期范围获取大货运单列表（自动分页获取全部数据）
+        :param start_date: 开始日期，格式 YYYY-MM-DD，默认为一个月前
+        :param end_date: 结束日期，格式 YYYY-MM-DD，默认为今天
+        :param operno_list: 单号列表，用于筛选特定单号
+        :param transport_type: 运输类型，默认为"全部"
+        :param dsid_list: 客户 ID 列表
+        :param pagesize: 每页数量 (default: 50)
+        :return: List of 大货运单 (完整的 list 数据) or None if request fails
+        """
+        url = "https://admin.hubs-scs.com/api/v1/oms/oms_bigwaybill_order/getlist"
+
+        # 设置默认日期范围（前一个月到今天）
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+        if start_date is None:
+            # 默认获取前一个月的数据
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+        # 用于存储所有结果
+        all_orders = []
+        current_page = 1
+
+        while True:
+            payload = {
+                "pageindex": current_page,
+                "pagesize": pagesize,
+                "open_search": False,
+                "sorts": [],
+                "operation_type": None,
+                "s_date": start_date,
+                "e_date": end_date,
+                "transport_type": transport_type,
+                "state": None,
+                "dsidlist": dsid_list if dsid_list else [],
+                "opernolist": operno_list if operno_list else [],
+                "bg_state": None,
+                "qg_state": None,
+                "fh_addr": "",
+            }
+
+            try:
+                response = self.httpx_client.post(url, json=payload, timeout=60)
+                data = response.json()
+                self.update_token(response.headers)
+
+                if not data.get("success") or "data" not in data:
+                    logger.error(
+                        f"Failed to get bigwaybill list (page {current_page}): {data.get('message', 'Unknown error')}"
+                    )
+                    return None
+
+                page_data = data["data"]
+                page_list = page_data.get("list", [])
+
+                if not page_list:
+                    # 当前页没有数据了，结束循环
+                    break
+
+                all_orders.extend(page_list)
+
+                # 检查是否还有下一页
+                total_count = page_data.get("totalCount", 0)
+                current_count = len(all_orders)
+
+                logger.info(f"已获取 {current_count}/{total_count} 条大货运单数据 (第{current_page}页)")
+
+                if current_count >= total_count:
+                    # 已经获取完所有数据
+                    break
+
+                current_page += 1
+
+            except httpx.RequestError as e:
+                logger.error(f"Request error while getting bigwaybill list (page {current_page}): {e}")
+                return None
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error while getting bigwaybill list (page {current_page}): {e}")
+                return None
+            except Exception as e:
+                logger.error(f"Unknown error while getting bigwaybill list (page {current_page}): {e}")
+                return None
+
+        logger.info(f"获取完成，共 {len(all_orders)} 条大货运单数据")
+        return all_orders
 def main():
     # Create a HubsClient instance which will handle login automatically
     client = HubsClient(retry_counts=5)

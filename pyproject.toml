@@ -43,4 +43,5 @@ dependencies = [
     "pulp>=3.3.0",
     "sse-starlette>=3.0.2",
     "pymupdf>=1.26.7",
+    "schedule>=1.2.2",
 ]

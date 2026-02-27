@@ -22,7 +22,7 @@ from app.schemas import DownloadOrderListRequest
 from morelink_api import MoreLinkClient
 from feapder.db.mysqldb import MysqlDB
 from dotenv import load_dotenv
-from rpa_tools import find_playwright_node_path
+from app.tools_auto.utils.hubs.hubs_client import HubsClient
 load_dotenv()
 
 order_router = APIRouter(prefix="/order", tags=["订单"])
@@ -1117,7 +1117,7 @@ async def get_customers_list():
 
 
 
-@order_router.get("/mannual_update_order", summary="手动更新订单信息（同步MoreLink数据到本地数据库）")
+@order_router.get("/mannual_update_order", summary="手动更新订单信息（同步 MoreLink 数据到本地数据库）")
 async def mannual_update_order():
     try:
         logger.info("开始获取数据")
@@ -1139,60 +1139,100 @@ async def mannual_update_order():
                 "message": "没有需要更新的数据",
                 "data": None
             }
-        
+
         logger.info(f"获取到{len(raw_data)}条需要更新的数据")
         customers_data = db.find("select id,customerName from tb_customers", to_json=True)
         customers_data_dict = {item["customerName"]:item["id"] for item in customers_data}
-        
-        # 按fbaShipmentBoxId的U分隔前面字符串分组
+
+        # 按 fbaShipmentBoxId 的 U 分隔前面字符串分组
         grouped_data = {}
         for item in raw_data:
             if item.get('fbaShipmentBoxId'):
-                # 以U分隔,取前面部分作为分组key
+                # 以 U 分隔，取前面部分作为分组 key
                 group_key = item['fbaShipmentBoxId'].split('U')[0] if 'U' in item['fbaShipmentBoxId'] else item['fbaShipmentBoxId']
                 if group_key not in grouped_data:
                     grouped_data[group_key] = []
                 grouped_data[group_key].append(item)
-        
-        logger.info("开始获取MoreLink数据")
-        
-        morelink_client = MoreLinkClient(node_path=find_playwright_node_path())
-        molink_dahuo_data = morelink_client.dahuodingdan_all_data()
-        logger.info(f"获取到{len(molink_dahuo_data)}条MoreLink数据")
+
+        logger.info("开始获取 MoreLink 数据")
+
+        hubs_client = HubsClient()
+        hubs_dahuo_data = hubs_client.get_bigwaybill_orders_list(pagesize=500)
+        logger.info(f"获取到{len(hubs_dahuo_data)}条 Hubs 数据")
 
         data = grouped_data
+        update_params = []  # 收集批量更新的参数
+        BATCH_SIZE = 100  # 批量更新阈值
         update_count = 0
+
+        def do_batch_update():
+            """执行批量更新"""
+            nonlocal update_count
+            if not update_params:
+                return
+
+            logger.info(f"开始批量更新 {len(update_params)} 条记录")
+            update_sql = "UPDATE tb_fbatracking SET sono = %s, customerId = %s, operNo = %s WHERE trackingId = %s OR fbaShipmentBoxId LIKE %s"
+
+            conn, cursor = db.get_connection()
+            try:
+                affect_count = cursor.executemany(update_sql, update_params)
+                conn.commit()
+                update_count += affect_count
+                logger.info(f"批量更新完成，成功更新 {affect_count} 条记录")
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"批量更新失败：{e}")
+                raise
+            finally:
+                db.close_connection(conn, cursor)
+
+            update_params.clear()  # 清空已处理的参数
+
         for key, value in data.items():
             try:
                 group_tracking_number = value[0]['trackingId']
                 customerId = None
-                for molink_dahuo_item in molink_dahuo_data:
-                    # if group_tracking_number in str(molink_dahuo_item["CourierNumber"]):
-                    if key in str(molink_dahuo_item["fbano"]):
-                        sono = molink_dahuo_item["sono"]
-                        operNo = molink_dahuo_item["operNo"]
-                        customername = molink_dahuo_item["customername"]
-                        customerId = customers_data_dict[customername]
+
+                for hubs_dahuo_item in hubs_dahuo_data:
+                    if key in str(hubs_dahuo_item["fbx_no"]):
+                        sono = hubs_dahuo_item["sono"]
+                        operNo = hubs_dahuo_item["operno"]
+                        customername = hubs_dahuo_item["abbreviation"]
+                        customerId = customers_data_dict.get(customername, None)
+                        # 如果直接匹配失败，尝试模糊匹配（customername 可能是完整名称的前缀）
+                        if customerId is None:
+                            for full_name, cid in customers_data_dict.items():
+                                if customername in full_name:
+                                    customerId = cid
+                                    logger.info(f"模糊匹配客户：'{customername}' -> '{full_name}'")
+                                    break
                         break
 
                 if customerId:
-                    db.update_smart("tb_fbatracking", {"sono": sono, "customerId": customerId,"operNo": operNo}, f"trackingId = '{group_tracking_number}' or fbaShipmentBoxId like '{key}%'")
-                    update_count += 1
-                # logger.info(f"处理分组 {key}: {value}")
+                    update_params.append((sono, customerId, operNo, group_tracking_number, f"{key}%"))
+
+                    # 达到阈值，执行批量更新
+                    if len(update_params) >= BATCH_SIZE:
+                        do_batch_update()
             except Exception as e:
-                logger.error(f"处理分组{key}时出错: {str(e)}")
+                logger.error(f"处理分组{key}时出错：{str(e)}")
                 continue
-                
-        logger.info(f"数据更新完成,共更新{update_count}条数据")
+
+        # 处理剩余的数据
+        do_batch_update()
+
+        logger.info(f"数据更新完成，共更新{update_count}条数据")
         return {
             "code": 200,
-            "message": "获取数据成功",
-            "data": data
+            "message": f"更新完成，共更新{update_count}条数据",
+            "data": {"update_count": update_count}
         }
     except Exception as e:
-        logger.error(f"获取数据出错: {traceback.format_exc()}")
+        logger.error(f"获取数据出错：{traceback.format_exc()}")
         return {
             "code": 500,
-            "message": f"获取数据失败: {str(e)}",
+            "message": f"获取数据失败：{str(e)}",
             "data": None
         }
+

@@ -112,12 +112,12 @@ task_logger.add(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # scheduler.start()
+    scheduler.start()
     yield
     # if jpype.isJVMStarted():
     #     jpype.shutdownJVM()
 
-    # scheduler.shutdown()
+    scheduler.shutdown()
 
 
 # 定义FastAPI应用
@@ -244,8 +244,9 @@ def cron_job():
     hubs_client = HubsClient()
     today = datetime.now()
     one_month_ago = today - timedelta(days=30)
+    one_month_later = today + timedelta(days=30)
     s_date = one_month_ago.strftime("%Y-%m-%d")
-    e_date = today.strftime("%Y-%m-%d")
+    e_date = one_month_later.strftime("%Y-%m-%d")
     hubs_payload = {"pageindex":1,"pagesize":200,"open_search":False,"sorts":[],"s_date":s_date,"e_date":e_date,"transport_type":"海运","sel_type":"operno","ids":[],"searchlist":[]}
     hubs_zongdan_data_res = hubs_client.httpx_client.post("https://admin.hubs-scs.com/api/v1/oms/oms_zginfo/getlist",json=hubs_payload)
     hubs_zongdan_data = hubs_zongdan_data_res.json()

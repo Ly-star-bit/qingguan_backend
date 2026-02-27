@@ -109,13 +109,14 @@ class AsposeCellsNETHandler:
         # style.VerticalAlignment = TextAlignmentType.Center
         # cell.SetStyle(style)
 
-    def excel_to_pdf(self, excel_path, pdf_save_path=None):
+    def excel_to_pdf(self, excel_path, pdf_save_path=None, sheet_name=None):
         """
         将Excel文件转换为PDF
 
         Args:
             excel_path (str): Excel文件路径
             pdf_save_path (str): PDF保存路径，如果为None则使用与Excel文件相同的路径
+            sheet_name (str): 指定要转换的sheet名称，如果为None则转换所有sheet
 
         Returns:
             str: 生成的PDF文件路径
@@ -135,6 +136,22 @@ class AsposeCellsNETHandler:
 
             # 配置PDF保存选项
             saveOption = PdfSaveOptions()
+
+            # 如果指定了sheet_name，则只导出该sheet
+            if sheet_name:
+                ids = []
+                for i in wb.Worksheets:
+                    if i.Name == sheet_name:
+                        ids.append(i.Index)
+                        break
+                
+                if ids:
+                    saveOption.SheetSet = SheetSet(ids)
+                else:
+                    raise Exception(f"未找到指定的工作表: {sheet_name}")
+            else:
+                # 导出所有sheet
+                saveOption.SheetSet = SheetSet(SheetSet.Visible)
 
             # 确保每个工作表单独保存为一个PDF页面
             saveOption.OnePagePerSheet = True
@@ -162,6 +179,10 @@ class AsposeCellsNETHandler:
 
             # 获取Excel文件的文件名（不含扩展名）
             excel_name = os.path.splitext(os.path.basename(excel_path))[0]
+
+            # 如果指定了sheet_name，文件名加上sheet名称
+            if sheet_name:
+                excel_name = f"{excel_name}_{sheet_name}"
 
             # 设置PDF文件的完整保存路径
             pdf_file = os.path.join(pdf_save_path, f"{excel_name}.pdf")
@@ -551,7 +572,70 @@ class AsposeCellsNETHandler:
             return pdf_path
         except Exception as e:
             raise Exception(f"生成加拿大模板Excel文件时出错: {str(e)}")
+    def shenzhen_air_pdf_generate(self, data: list):
+        """
+        生成深圳海关PDF文件
 
+        Args:
+            data: 数据列表
+
+        Returns:
+            str: 生成的PDF文件路径
+        """
+        try:
+            template_path = "HAWB模板-空+海_测试新版.xls"
+            wb = Workbook(template_path)
+            
+            # 获取"录入页面"sheet
+            luru_sheet = wb.Worksheets["录入页面"]
+            
+            def set_cell_value_internal(sheet, row, column, value):
+                if value is None:
+                    value = ""
+                cell = sheet.Cells[row - 1, column - 1]  # Adjust for zero-based index
+
+                if isinstance(value, str) and value.startswith("="):
+                    cell.Formula = value
+                else:
+                    cell.PutValue(value)
+
+            # 将data列表写入"录入页面"sheet的D列，从第1行开始
+            for index, item in enumerate(data):
+                row_num = index + 1
+                set_cell_value_internal(luru_sheet, row_num, 4, item)
+
+            # 导出"A#-SZ"sheet为PDF
+            output_sheet_name = "A#-SZ"
+            ids = []
+            for i in wb.Worksheets:
+                origin_sheetname = i.Name
+                if origin_sheetname == output_sheet_name:
+                    ids.append(i.Index)
+
+            if not ids:
+                ids = [0] if wb.Worksheets.Count > 0 else []
+
+            new_SheetSet = SheetSet(ids) if ids else SheetSet([0])
+
+            saveOption = PdfSaveOptions()
+            saveOption.SheetSet = new_SheetSet
+            saveOption.OnePagePerSheet = True
+            saveOption.CalculateFormula = True
+            saveOption.CheckWorkbookDefaultFont = True
+            saveOption.CheckFontCompatibility = True
+            saveOption.DefaultFont = "Arial"
+            saveOption.ImageResample = (220, 85)
+            saveOption.EmbedStandardWindowsFonts = True
+            saveOption.ClearData = False
+            saveOption.Compliance = PdfCompliance.Pdf14
+            saveOption.DisplayDocTitle = True
+
+            pdf_file = f"./pdf/customs/{data[0]}.pdf"
+
+            wb.Save(pdf_file, saveOption)
+            return pdf_file
+        except Exception as e:
+            raise Exception(f"生成深圳海关PDF文件时出错: {str(e)}")
     def shenzhen_customes_pdf_generate(self, data, filter_data):
         """
         生成深圳海关PDF文件
@@ -669,8 +753,9 @@ class AsposeCellsNETHandler:
             saveOption.DisplayDocTitle = True
 
             # 设置PDF文件的完整保存路径
-            totalyugutax = data["other_data"]["totalyugutax"]
-            pdf_file = f"./pdf/customs/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}-{data['master_bill_no']}-{totalyugutax}.pdf"
+            # totalyugutax = data["other_data"]["totalyugutax"]
+            # pdf_file = f"./pdf/customs/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}-{data['master_bill_no']}-{totalyugutax}.pdf"
+            pdf_file = f"./pdf/customs/{data['master_bill_no']}.pdf"
 
             # 保存为PDF
             wb.Save(pdf_file, saveOption)
@@ -1124,7 +1209,23 @@ def shenzhen_customes_pdf_gennerate(data, filter_data):
     end_time = time.time()
     print(f"shenzhen_customes_pdf_gennerate 运行时间: {end_time - start_time:.2f} 秒")
     return result
+def shenzhen_air_pdf_gennerate(data):
+    """
+    生成深圳海关PDF文件
 
+    Args:
+        data: 数据
+        filter_data: 过滤数据
+
+    Returns:
+        str: 生成的PDF文件路径
+    """
+    start_time = time.time()
+    # handler = AsposeCellsNETHandler()
+    result = handler.shenzhen_air_pdf_generate(data)
+    end_time = time.time()
+    print(f"shenzhen_customes_pdf_gennerate 运行时间: {end_time - start_time:.2f} 秒")
+    return result
 
 def generate_admin_shenhe_template(data, totalyugutax):
     """

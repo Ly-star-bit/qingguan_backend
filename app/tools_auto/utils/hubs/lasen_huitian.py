@@ -5,6 +5,7 @@ import pandas as pd
 
 from app.tools_auto.utils.hubs.hubs_client import HubsClient
 
+from rpa_tools.email_tools import send_email,read_email_by_subject
 
 def safe_float(value):
     try:
@@ -152,6 +153,7 @@ def process_excel_to_json2(excel_content, is_binary=True, all_fbx_address: list 
         fba_no = ",".join(group["订单单号"].unique())
         yj_qty = int(safe_float(group["数量"].sum()))
         yj_kg = round(safe_float(group["重量"].sum()), 2)
+        yj_cbm = round(safe_float(group["总箱数"].sum()), 3)
         a_number = group["进仓号"].dropna().unique()[0]
         take_goods = "\n".join(map(str, group["总箱数"].dropna().unique()))
         origin_code = group["仓库代码"].dropna().unique()[0]
@@ -171,11 +173,12 @@ def process_excel_to_json2(excel_content, is_binary=True, all_fbx_address: list 
 
         result = {
             "order": {
-                "fba_no": fba_no,
+                "fbx_no": fba_no,
                 "yj_qty": yj_qty,
                 "yj_kg": yj_kg,
+                "yj_cbm":yj_cbm,
                 "have_no": a_number,
-                "packing": take_goods,
+                "packing": "箱",
                 "d_code": converted["d_code"],
                 "fbx_name": converted.get("fbx_name", ""),
                 "fbx_code": converted.get("fbx_code", ""),
@@ -195,15 +198,162 @@ def process_excel_to_json2(excel_content, is_binary=True, all_fbx_address: list 
 
     return result_list
 
-# hubs_client = HubsClient()
-# all_fbx_address = hubs_client.get_base_fbx_addr()
+def main():
+    import traceback
+    from loguru import logger
+    logger.add("logs/lasen_huitian_{time:%Y%m%d}.log", rotation="00:00", retention="7 days", encoding="utf-8")
 
-# data = process_excel_to_json2(
-#     r"C:\Users\a1337\Desktop\数据汇总-赫泊斯美空1.12.xlsx",
-#     False,
-#     all_fbx_address=all_fbx_address,
-# )
+    subject_input = "lasen回填"
+    logger.info(f"开始处理主题为 [{subject_input}] 的邮件")
 
-# # print(data)
+    try:
+        email_data = read_email_by_subject(subject_input=subject_input, seen=True)
+        if not email_data:
+            logger.warning("未找到符合条件的邮件")
+     
+            return
 
-# hubs_client.update_bigwaybill_order(data[0]['have_no'], data[0])
+        logger.info(f"成功读取 {len(email_data)} 封邮件")
+
+        hubs_client = HubsClient()
+        all_fbx_address = hubs_client.get_base_fbx_addr()
+        logger.info(f"获取到 {len(all_fbx_address)} 个仓库地址")
+
+        success_count = 0
+        fail_count = 0
+        results_detail = []
+
+        for idx, email_item in enumerate(email_data, 1):
+            sender_email = email_item.get('from', '')
+            try:
+                logger.info(f"处理第 {idx} 封邮件，来自: {sender_email}")
+                excel_attachment = None
+                for att in email_item.get('attachments', []):
+                    if att['filename'] and att['filename'].lower().endswith(('.xlsx', '.xls')):
+                        excel_attachment = att
+                        logger.info(f"找到Excel附件: {att['filename']}")
+                        break
+
+                if not excel_attachment:
+                    logger.warning(f"第 {idx} 封邮件未找到Excel附件")
+                    fail_count += 1
+                    results_detail.append(f"第{idx}封邮件: 失败 - 未找到Excel附件")
+                    send_email(
+                        receiver_email=sender_email,
+                        subject=f"[lasen回填]处理结果 - 第{idx}封",
+                        body=f"处理失败: 未找到Excel附件\n\n发件人: {sender_email}"
+                    )
+                    continue
+
+                data_list = process_excel_to_json2(
+                    excel_attachment['content'],
+                    is_binary=True,
+                    all_fbx_address=all_fbx_address,
+                )
+
+                if not data_list:
+                    logger.warning(f"第 {idx} 封邮件: Excel数据解析为空")
+                    fail_count += 1
+                    results_detail.append(f"第{idx}封邮件: 失败 - Excel数据解析为空")
+                    send_email(
+                        receiver_email=sender_email,
+                        subject=f"[lasen回填]处理结果 - 第{idx}封",
+                        body=f"处理失败: Excel数据解析为空\n\n发件人: {sender_email}"
+                    )
+                    continue
+
+                success_list = []
+                fail_list = []
+
+                for data_idx, data in enumerate(data_list):
+                    have_no = data.get('order', {}).get('have_no')
+                    if not have_no:
+                        logger.warning(f"第 {idx} 封邮件第 {data_idx+1} 条: have_no为空，跳过")
+                        fail_list.append({"have_no": "空", "reason": "have_no为空"})
+                        fail_count += 1
+                        continue
+
+                    logger.info(f"第 {idx} 封邮件第 {data_idx+1} 条: 开始回填进仓号 {have_no}")
+
+                    result = hubs_client.update_bigwaybill_order([have_no], data)
+                    logger.info(f"回填结果: {result}")
+
+                    if result and result.get("success"):
+                        logger.info(f"回填成功: {have_no}")
+                        success_count += 1
+                        success_list.append(have_no)
+                    else:
+                        error_msg = result.get("message", "未知错误") if result else "返回结果为空"
+                        logger.warning(f"回填失败: {have_no}, 原因: {error_msg}")
+                        fail_count += 1
+                        fail_list.append({"have_no": have_no, "reason": error_msg})
+
+                success_text = "\n".join(success_list) if success_list else "无"
+                fail_text = "\n".join([f"{item['have_no']}: {item['reason']}" for item in fail_list]) if fail_list else "无"
+
+                body = f"""处理完成
+
+成功列表 ({len(success_list)} 条):
+{success_text}
+
+失败列表 ({len(fail_list)} 条):
+{fail_text}
+
+发件人: {sender_email}"""
+
+                if len(fail_list) == 0:
+                    subject = f"[lasen回填]处理结果 - 成功"
+                elif len(success_list) == 0:
+                    subject = f"[lasen回填]处理结果 - 全部失败"
+                else:
+                    subject = f"[lasen回填]处理结果 - 部分失败"
+
+                send_email(
+                    receiver_email=sender_email,
+                    subject=subject,
+                    body=body
+                )
+
+            except Exception as e:
+                logger.error(f"处理第 {idx} 封邮件失败: {str(e)}")
+                logger.error(traceback.format_exc())
+                fail_count += 1
+                results_detail.append(f"第{idx}封邮件: 失败 - {str(e)}")
+                send_email(
+                    receiver_email=sender_email,
+                    subject=f"[lasen回填]处理结果 - 失败",
+                    body=f"处理失败: {str(e)}\n\n发件人: {sender_email}\n\n详情:\n{traceback.format_exc()}"
+                )
+
+    except Exception as e:
+        logger.error(f"程序执行失败: {str(e)}")
+        logger.error(traceback.format_exc())
+        send_email(
+            subject=f"[lasen回填]处理异常",
+            body=f"程序执行异常: {str(e)}\n\n{traceback.format_exc()}"
+        )
+
+
+def run_scheduler(interval_seconds=180):
+    import schedule
+    import time as time_module
+    from loguru import logger
+
+    logger.info(f"启动定时任务，每 {interval_seconds} 秒执行一次")
+
+    schedule.every(interval_seconds).seconds.do(main)
+
+    while True:
+        schedule.run_pending()
+        time_module.sleep(1)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--schedule":
+        interval = int(sys.argv[2]) if len(sys.argv) > 2 else 180
+        run_scheduler(interval)
+    else:
+        main()
+
+    # process_excel_to_json2(is_binary=False, excel_content=r"C:\Users\a1337\Desktop\数据汇总-赫泊斯美空-1.30.xlsx")

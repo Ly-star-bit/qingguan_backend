@@ -1,116 +1,204 @@
 import pandas as pd
-from datetime import datetime, time
+import traceback
+import os
+from datetime import datetime
 
-def process_excel_to_json(excel_path):
-    # 读取Excel文件
-    df = pd.read_excel(excel_path)
+from app.utils_aspose import shenzhen_air_pdf_gennerate, shenzhen_customes_pdf_gennerate
+from rpa_tools.email_tools import send_email
+from rpa_tools.utils import find_playwright_node_path
+from morelink_api import MoreLinkClient
 
-    # 去除列名空格
-    df.columns = df.columns.str.strip()
-    
-    # 删除和列名相同的行
-    df = df[~df.isin(df.columns).all(axis=1)]
+receiver_emial = "op_sea@hubs-scs.com"
 
-    # 去除仓库代码为空的row
-    df = df[df['目的仓'].notna()]
 
-    # 获取仓库代码前4位
-    df['仓库代码'] = (
-    df['目的仓']
-    .astype(str)
-    .str.strip()
-    .str.replace('（', '(', regex=False)
-    .str.replace('）', ')', regex=False)
-)
-    # 处理FBA号
-    df['订单单号'] = df['FBA号'].fillna('')
+def convert_date_format(date_str):
+    """将日期字符串转换为 dd/MMM/yy 格式（如 05/May/24）"""
+    if not date_str:
+        return ""
+    try:
+        date_obj = datetime.strptime(str(date_str), '%Y-%m-%d %H:%M')
+        return date_obj.strftime('%d/%b/%y')
+    except ValueError:
+        try:
+            date_obj = datetime.strptime(str(date_str), '%Y-%m-%d')
+            return date_obj.strftime('%d/%b/%y')
+        except ValueError:
+            return date_str
 
-    # 处理体积
-    df['体积'] = pd.to_numeric(df['预计体积'], errors='coerce').fillna(0)
 
-    # 处理数量
-    df['数量'] = pd.to_numeric(df['预计件数'], errors='coerce').fillna(0)
+def process_excel(file_path):
+    """读取 Excel 并按提单号 group 合并"""
+    df = pd.read_excel(file_path)
 
-    # 处理重量
-    df['重量'] = pd.to_numeric(df['预计毛重'], errors='coerce').fillna(0)
+    columns = [
+        "提单号",
+        "提单发货人",
+        "提单收货人",
+        "箱数",
+        "毛重/(KG)",
+        "体积/(立方米)",
+        "品名",
+    ]
+    df = df[columns]
 
-    # 去除全部为nan的行
-    df = df.dropna(how='all')
-    df['预计入仓时间'] = df['预计入仓时间'].fillna("")
-    df['提货时间'] = df['提货时间'].fillna("")
-    # 【填写订单】
-    df['发货单位'] = df['发货单位']
-    df['业务类型'] = df['业务类型']
-    df['报关方式'] = df['报关方式']
-    df['清关方式'] = df['清关方式']
-    df['自营渠道'] = df['自营和客户渠道']
-    df['客户渠道'] = df['自营和客户渠道']
-    df['产品性质'] = df['产品性质']
-    df['提货方式'] = '上门提货'
+    grouped = (
+        df.groupby("提单号")
+        .agg(
+            {
+                "品名": "first",
+                "提单发货人": "first",
+                "提单收货人": "first",
+                "箱数": "sum",
+                "毛重/(KG)": "sum",
+                "体积/(立方米)": "sum",
+            }
+        )
+        .reset_index()
+    )
 
-    # 提货时间处理
-    if '提货时间' in df.columns:
-        if pd.api.types.is_numeric_dtype(df['提货时间']) and not df['预计入仓时间'].isna().all() :
-            df['上门提货日期'] = pd.to_datetime(df['提货时间'], unit='D', origin='1899-12-30').strftime('%Y-%m-%d %H:%M')
-        elif pd.api.types.is_datetime64_any_dtype(df['提货时间']):
-            df['上门提货日期'] = df['提货时间'].dt.strftime('%Y-%m-%d %H:%M')
-        else:
-            df['上门提货日期'] = df['提货时间'].astype(str)
-    else:
-        df['上门提货日期'] = None  # 或者其他默认值
+    result = []
+    for _, row in grouped.iterrows():
+        result.append(
+            {
+                "shipper_name": row["提单发货人"],
+                "receiver_name": row["提单收货人"],
+                "master_bill_no": row["提单号"],
+                "gross_weight": int(row["毛重/(KG)"]),
+                "volume": float(row["体积/(立方米)"]),
+                "total_boxes": int(row["箱数"]),
+                "all_english_name": row["品名"],
+            }
+        )
 
-    df['送货仓库'] = df['送货仓']
+    return result
 
-    # 预计入仓时间处理
-    if '预计入仓时间' in df.columns:
-        if pd.api.types.is_numeric_dtype(df['预计入仓时间']) and not df['预计入仓时间'].isna().all():
-            df['预计入仓时间'] = pd.to_datetime(df['预计入仓时间'], unit='D', origin='1899-12-30').strftime('%Y-%m-%d %H:%M')
-        elif pd.api.types.is_datetime64_any_dtype(df['预计入仓时间']):
-            df['预计入仓时间'] = df['预计入仓时间'].dt.strftime('%Y-%m-%d %H:%M')
-        else:
-            df['预计入仓时间'] = df['预计入仓时间'].astype(str)
-    else:
-        df['预计入仓时间'] = None  # 或者其他默认值
-        
-    df['司机资料'] = df['司机资料']
 
-    # 【收货地址】
-    df['国家'] = df['国家']
-    df['客户内部号'] = df['客户内部号']
-    df['报价单价'] = df['报价单价']
-    df['成本单价'] = df['报价单价']
-    df['业务备注'] = df['业务备注']
-    df['标记栏'] = df['FOM 标记']
-    
+def generate_pdf_from_excel(file_path):
+    """从 Excel 生成 PDF"""
+    excel_data = process_excel(file_path)
+    print(f"处理完成，共{len(excel_data)}条数据")
 
-    # 创建结果DataFrame
-    result_df = pd.DataFrame({
-        '搜索CODE': df['仓库代码'],
-        'FBA号': df['订单单号'],
-        '预计数量': df['数量'],
-        '预计体积': df['体积'],
-        '预计重量': df['重量'],
-        '发货单位': df['发货单位'],
-        '业务类型': df['业务类型'],
-        '报关方式': df['报关方式'],
-        '清关方式': df['清关方式'],
-        '自营渠道': df['自营渠道'],
-        '客户渠道': df['客户渠道'],
-        '产品性质': df['产品性质'],
-        '提货方式': df['提货方式'],
-        '上门提货日期': df['上门提货日期'],
-        '送货仓库': df['送货仓库'],
-        '预计入仓时间': df['预计入仓时间'],
-        '司机资料': df['司机资料'],
-        '国家': df['国家'],
-        '客户内部号': df['客户内部号'],
-        '报价单价': df['报价单价'],
-        '成本单价': df['成本单价'],
-        '业务备注': df['业务备注'],
-        '标记栏': df['标记栏']
-    })
-    result_df = result_df.fillna("")
-    result_df.to_dict(orient='records')
-    return result_df
+    # 初始化 Morelink 客户端
+    node_path = find_playwright_node_path()
+    morelink_client = MoreLinkClient(node_path)
+    morelink_data = morelink_client.zongdan_api_httpx()
 
-process_excel_to_json(r"C:\Users\a1337\Desktop\通用客户_1758681874.3716567.xlsx")
+    if not morelink_data:
+        print("Morelink 数据获取失败")
+        return
+
+    morelink_field_mapping = {
+        "billno": "hblno",
+        "startland": "startland",
+        "destination": "destination",
+        "flight": "flight",
+        "cabinetNo": "cabinetNo",
+        "sealno": "sealno",
+        "ATD": "ATD",
+    }
+
+    success_count = 0
+    fail_count = 0
+    failed_bills = []  # 记录失败的提单号
+
+    for item in excel_data:
+        try:
+            master_bill_no = item["master_bill_no"].strip()
+            is_air = "-" in master_bill_no  # 有 - 是空运，没有是海运
+
+            # 检查 PDF 是否已存在
+            pdf_path = f"./pdf/customs/{master_bill_no}.pdf"
+            if os.path.exists(pdf_path):
+                # print(f"PDF 已存在，跳过：{master_bill_no}")
+                success_count += 1
+                continue
+
+            # 从 Morelink 查询
+            filter_data = [
+                row for row in morelink_data if row.get("billno") == master_bill_no
+            ]
+
+            if not filter_data:
+                print(f"提单号搜索不到：{master_bill_no}")
+                fail_count += 1
+                failed_bills.append(master_bill_no)
+                continue
+
+            # 字段映射
+            mapped_data = []
+            for data_item in filter_data:
+                mapped_item = {
+                    morelink_field_mapping.get(k, k): v for k, v in data_item.items()
+                }
+                mapped_data.append(mapped_item)
+
+            # 生成 PDF
+            if is_air:
+                # 空运 - 使用 shenzhen_air_pdf_gennerate
+                atd_value = mapped_data[0].get("ATD")
+                atd_formatted = convert_date_format(atd_value) if atd_value else ""
+
+                input_data = [
+                        master_bill_no,
+                        master_bill_no,
+                        "",
+                        "",
+                        "",
+                        item["shipper_name"],
+                        "",
+                        item["receiver_name"],
+                        mapped_data[0]["startland"],
+                        mapped_data[0]["destination"],
+                        mapped_data[0]['shipcompany'],
+                        atd_formatted,
+                        mapped_data[0]["flight"],
+                        item["total_boxes"],
+                        item["gross_weight"],
+                        "",
+                        item["volume"],
+                        'CLOTHING',
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                    ]
+                pdf_file = shenzhen_air_pdf_gennerate(input_data)
+            else:
+                # 海运 - 使用 shenzhen_customes_pdf_gennerate(data, mapped_data)
+                request_data = {
+                    "shipper_name": item["shipper_name"],
+                    "receiver_name": item["receiver_name"],
+                    "master_bill_no": master_bill_no,
+                    "gross_weight": item["gross_weight"],
+                    "volume": item["volume"],
+                    "total_boxes": item["total_boxes"],
+                    "all_english_name": "CLOTHING",
+                }
+                pdf_file = shenzhen_customes_pdf_gennerate(request_data, mapped_data[0])
+
+            print(f"已生成 pdf 文件->{pdf_file}")
+            success_count += 1
+
+        except Exception as e:
+            print(f"处理异常：{traceback.format_exc()}")
+            fail_count += 1
+            failed_bills.append(item.get("master_bill_no", "未知"))
+            continue
+
+    print(f"完成！成功：{success_count}, 失败：{fail_count}")
+
+    # 输出所有失败的提单号
+    if failed_bills:
+        print("\n========== 失败的提单号列表 ==========")
+        for bill_no in failed_bills:
+            print(f"  - {bill_no}")
+        print(f"=====================================")
+        print(f"失败提单号共计：{len(failed_bills)} 个")
+
+
+if __name__ == "__main__":
+    generate_pdf_from_excel(r"C:\Users\a1337\Desktop\赫泊斯-(1123).xlsx")

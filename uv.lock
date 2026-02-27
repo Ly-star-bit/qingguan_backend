@@ -1281,6 +1281,15 @@ wheels = [
 ]
 
 [[package]]
+name = "schedule"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0c/91/b525790063015759f34447d4cf9d2ccb52cdee0f1dd6ff8764e863bcb74c/schedule-1.2.2.tar.gz", hash = "sha256:15fe9c75fe5fd9b9627f3f19cc0ef1420508f9f9a46f45cd0769ef75ede5f0b7", size = 26452 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/a7/84c96b61fd13205f2cafbe263cdb2745965974bdf3e0078f121dfeca5f02/schedule-1.2.2-py3-none-any.whl", hash = "sha256:5bef4a2a0183abf44046ae0d164cadcac21b1db011bdd8102e4a0c1e91e06a7d", size = 12220 },
+]
+
+[[package]]
 name = "shapely"
 version = "2.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1584,6 +1593,7 @@ dependencies = [
     { name = "pytoml" },
     { name = "pywin32", marker = "platform_system == 'Windows'" },
     { name = "requests" },
+    { name = "schedule" },
     { name = "sqlmodel" },
     { name = "sse-starlette" },
     { name = "tenacity" },
@@ -1626,6 +1636,7 @@ requires-dist = [
     { name = "pytoml", specifier = ">=0.1.21" },
     { name = "pywin32", marker = "platform_system == 'Windows'", specifier = ">=308" },
     { name = "requests", specifier = ">=2.32.3" },
+    { name = "schedule", specifier = ">=1.2.2" },
     { name = "sqlmodel", specifier = ">=0.0.22" },
     { name = "sse-starlette", specifier = ">=3.0.2" },
     { name = "tenacity", specifier = ">=9.0.0" },

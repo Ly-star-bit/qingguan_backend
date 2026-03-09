@@ -151,7 +151,8 @@ class AsposeCellsNETHandler:
                     raise Exception(f"未找到指定的工作表: {sheet_name}")
             else:
                 # 导出所有sheet
-                saveOption.SheetSet = SheetSet(SheetSet.Visible)
+                visible_ids = [i.Index for i in wb.Worksheets if i.IsVisible]
+                saveOption.SheetSet = SheetSet(visible_ids) if visible_ids else SheetSet([0])
 
             # 确保每个工作表单独保存为一个PDF页面
             saveOption.OnePagePerSheet = True

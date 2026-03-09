@@ -18,16 +18,15 @@ uri = f"mongodb://{MONGO_CONFIG['username']}:{MONGO_CONFIG['password']}@{MONGO_C
 mongo_client = MongoClient(uri)
 mongo_db = mongo_client[MONGO_CONFIG['database']]
 
-# # 读取Excel文件并更新products集合中的装箱和单价数据
-products_collection = mongo_db['permissions']
-permissions_collection = mongo_db['permissions']
 
 def migrate_menu_id_to_menu_ids():
     """
     将 permissions 集合中的 menu_id 字段迁移为 menu_ids 数组
     """
     print("开始数据迁移...")
-    
+    # # 读取Excel文件并更新products集合中的装箱和单价数据
+    permissions_collection = mongo_db['permissions']
+
     # 统计信息
     total_count = 0
     updated_count = 0
@@ -76,37 +75,7 @@ def migrate_menu_id_to_menu_ids():
             error_count += 1
             print(f"❌ 更新权限 {permission.get('code')} 时出错: {str(e)}")
 
-migrate_menu_id_to_menu_ids()
-# 读取Excel文件
-df = pd.read_excel(r'C:\Users\a1337\Desktop\301-更新-IT-海运.xlsx')  # 请替换为实际的Excel文件名
-df.fillna(0,inplace=True)
-# 遍历Excel数据并更新MongoDB文档
-update_count = 0
-for _, row in df.iterrows():
-    try:
-        # 通过ID查找文档
-        product_id = row['id']  # 假设Excel中的ID列名为'id'
-        
-        # 首先获取当前文档
-        doc = products_collection.find_one({"_id": ObjectId(product_id)})
-        
-        update_fields = {
-                    "豁免截止日期说明": row["豁免截止日期说明"].strftime("%Y-%m-%d")
-        }
-        
 
-
-        result = products_collection.update_one(
-            {"_id": ObjectId(product_id)},
-            {"$set": update_fields}
-        )
-        
-        if result.modified_count > 0:
-            update_count += 1
-    except Exception as e:
-        print(f"更新文档 {product_id} 时发生错误: {e}")
-
-print(f"成功更新 {update_count} 个文档的装箱和单价数据")
 
 def add_additional_tax_data():
     """
@@ -227,9 +196,58 @@ def update_products_from_excel(excel_file):
     except Exception as e:
         print(f"发生错误: {e}")
 
+
+def update_additional_tax_fields():
+    """
+    更新 products_sea 和 products 集合中的加征字段：
+    1. 将 加征_芬太尼 设置为 0.0
+    2. 将 加征_对等 设置为 0.0
+    3. 添加 加征_Section122 为 0.1
+    仅更新那些同时存在"加征_芬太尼"和"加征_对等"字段的文档
+    """
+    try:
+        collections_to_update = ['products_sea', 'products']
+        total_updated = 0
+
+        for collection_name in collections_to_update:
+            collection = mongo_db[collection_name]
+            
+            # 先将加征字段为空或不存在或为字符串的文档初始化为空对象
+            collection.update_many(
+                {"$or": [{"加征": {"$exists": False}}, {"加征": ""}, {"加征": None}]},
+                {"$set": {"加征": {}}}
+            )
+            
+            # 只更新同时存在"加征_芬太尼"和"加征_对等"字段的文档
+            query = {
+                "加征.加征_芬太尼": {"$exists": True},
+                "加征.加征_对等": {"$exists": True}
+            }
+            
+            result = collection.update_many(
+                query,
+                {
+                    '$set': {
+                        '加征.加征_芬太尼': '0.0',
+                        '加征.加征_对等': '0.0',
+                        '加征.加征_Section122': '0.1'
+                    }
+                }
+            )
+            
+            total_updated += result.modified_count
+            print(f"集合 {collection_name}: 成功更新 {result.modified_count} 个文档")
+
+        print(f"总共更新了 {total_updated} 个文档")
+
+    except Exception as e:
+        print(f"更新加征字段时发生错误: {e}")
+
+
 if __name__ == '__main__':
     # excel_file_path = r'C:\Users\a1337\Desktop\美国HS-导出-250211(1).xlsx'  # 替换为你的Excel文件路径
     # update_products_from_excel(excel_file_path)
     # update_estimated_tax_rate()
     # add_additional_tax_data()
+    update_additional_tax_fields()
     pass

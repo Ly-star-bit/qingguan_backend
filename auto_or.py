@@ -231,7 +231,7 @@ def optimize_packing_selection(
                                 "name": names[i],
                                 "boxes": bc,
                                 "weight_per_box": wv / bc,
-                                "total_weight": wv,
+                                "total_weight": round(wv),
                                 "value_usd": vv,
                                 "tax_cny": tc,
                                 "pieces_per_box": pcs_per_box[i],
@@ -246,7 +246,7 @@ def optimize_packing_selection(
                     {
                         "selected_products": selected,
                         "summary": {
-                            "total_weight": tw,
+                            "total_weight": round(tw),
                             "total_value_usd": tv,
                             "total_tax_cny": tt,
                             "value_per_weight_usd": tv / tw if tw > 0 else 0,
@@ -282,11 +282,11 @@ def optimize_packing_selection(
             )
             for p in best["selected_products"]:
                 print(
-                    f"{p['name']:<25} | {p['boxes']:>5} | {p['total_weight']:>10.1f} | {p['value_usd']:>12.1f} | {p['tax_cny']:>10.1f}"
+                    f"{p['name']:<25} | {p['boxes']:>5} | {p['total_weight']:>10} | {p['value_usd']:>12.1f} | {p['tax_cny']:>10.1f}"
                 )
             print("-" * 85)
             print(
-                f"总计: {B_target:>22} | {s['total_weight']:>10.1f} | {s['total_value_usd']:>12.1f} | {s['total_tax_cny']:>10.1f}"
+                f"总计: {B_target:>22} | {s['total_weight']:>10} | {s['total_value_usd']:>12.1f} | {s['total_tax_cny']:>10.1f}"
             )
             print(
                 f"验证指标: 货值/重量={s['value_per_weight_usd']:.2f} (阈值≥{curr_alpha:.2f}) | 税金/重量={s['tax_per_weight_cny']:.2f} (阈值≤{curr_beta:.2f})"

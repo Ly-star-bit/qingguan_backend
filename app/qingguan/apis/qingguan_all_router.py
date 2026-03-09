@@ -100,10 +100,14 @@ def process_shipping_data(
     predict_tax_price: float,
     execute_type: str,
     export_country: str,
+    port_name:str="",
     session: MongoClient = Depends(get_session),
 ):
     db = session
     exchange_rate = db.exchange_rates.find_one({"version": "latest","type":"美金人民币汇率"})
+    port_detail = None
+    if port_name:
+        port_detail = db.ports.find_one({"port_name":port_name})
     num_products = sum([i.box_num for i in product_list])
     if num_products == 0:
         raise ValueError("Product list cannot be empty")
@@ -223,6 +227,8 @@ def process_shipping_data(
                 "packing":product_record.get("件箱"),
 
             }
+        if float(port_detail['expansion_factor']) != 1:
+            single_price = single_price*float(port_detail['expansion_factor'])
 
         if product.packing:
             packing = product.packing
@@ -689,6 +695,7 @@ async def process_shipping_data_endpoint(
                 execute_type=request.execute_type,
                 export_country=request.export_country,
                 session=session,
+                port_name = request.port
         )
 
         if isinstance(results, dict) and results.get("product_attribute"):

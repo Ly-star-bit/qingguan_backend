@@ -474,6 +474,58 @@ def copy_remote_collections_between_databases():
         main_remote_client.close()
         target_remote_client.close()
 
+def backup_and_update_products_price():
+    """
+    备份products集合到products_old，并将每个文档的'单价'字段乘以1.1
+    操作远程MongoDB
+    """
+    try:
+        # 连接远程MongoDB
+        remote_uri = f"mongodb://{REMOTE_MONGO_CONFIG['username']}:{REMOTE_MONGO_CONFIG['password']}@{REMOTE_MONGO_CONFIG['host']}:{REMOTE_MONGO_CONFIG['port']}"
+        remote_client = MongoClient(remote_uri)
+        remote_db = remote_client[REMOTE_MONGO_CONFIG['database']]
+
+        products_collection = remote_db['products']
+        products_old_collection = remote_db['products_old']
+
+        # 读取所有文档
+        documents = list(products_collection.find())
+        doc_count = len(documents)
+        
+        print(f"读取到 {doc_count} 条products文档")
+
+        # 备份到products_old（先清空再插入）
+        products_old_collection.delete_many({})
+        if documents:
+            products_old_collection.insert_many(documents)
+        print(f"已备份 {doc_count} 条文档到products_old")
+
+        # 更新单价字段 * 1.1
+        updated_count = 0
+        for doc in documents:
+            单价 = doc.get('单价')
+            if 单价 is not None:
+                try:
+                    # 尝试转换为浮点数并乘以1.1
+                    new_price = float(单价) * 1.1
+                    products_collection.update_one(
+                        {'_id': doc['_id']},
+                        {'$set': {'单价': str(new_price)}}
+                    )
+                    updated_count += 1
+                except (ValueError, TypeError) as e:
+                    print(f"警告: 文档 {doc.get('_id')} 的单价 '{单价}' 转换失败: {e}")
+
+        print(f"已更新 {updated_count} 条文档的单价字段 (*1.1)")
+        print("操作完成")
+
+    except Exception as e:
+        print(f"操作过程中发生错误: {str(e)}")
+
+    finally:
+        remote_client.close()
+
+
 if __name__ == "__main__":
     # 选择要执行的同步函数：
     # sync_collections() - 将本地数据同步到线上
@@ -483,6 +535,7 @@ if __name__ == "__main__":
     # sync_users_password_from_remote() - 将线上users集合的密码同步到本地，根据username覆盖
     # copy_local_to_remote_new_database() - 将本地数据库全部复制到线上新数据库qingguan2-latest
     # copy_remote_collections_between_databases() - 将qingguan数据库的两个集合复制到qingguan2-latest数据库
+    # backup_and_update_products_price() - 备份products到products_old，并将单价*1.1
 
-    # 调用新的复制函数
-    copy_remote_collections_between_databases()
+    # 调用新函数
+    backup_and_update_products_price()

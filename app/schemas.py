@@ -79,6 +79,7 @@ class ShippingRequest(BaseModel):
     volume: float
     execute_type:str
     currency_type:str="CAD"
+    operate_type:str=""
     product_list: List[ProductData]
 class DaleiCreate(BaseModel):
     hs_code: Optional[str]

@@ -64,7 +64,61 @@ from app.utils_aspose import (
 )
 from app.db_mongo import get_session
 from urllib.parse import quote
+from decimal import Decimal, ROUND_HALF_UP
 
+def process_unit_price(value):
+    # 1. 处理空值或非数字情况
+    if value is None or value == "":
+        return ""
+    
+    try:
+        # 转换为 Decimal 以保证精度
+        # 如果输入是字符串，直接转；如果是 float，先转字符串再转 Decimal 避免浮点误差
+        if isinstance(value, float):
+            num = Decimal(str(value))
+        else:
+            num = Decimal(str(value))
+            
+        # 第一步：标准四舍五入保留两位小数
+        # quantize(Decimal('0.01')) 配合 ROUND_HALF_UP 实现标准的四舍五入
+        rounded_num = num.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        
+        # 将结果拆分为整数部分和小数部分以便处理第二位小数
+        # 例如 0.96 -> sign=1, digits=(9, 6), exponent=-2
+        sign, digits, exponent = rounded_num.as_tuple()
+        
+        # 确保至少有两位小数（防止出现类似 5.0 的情况，虽然 quantize 后通常是两位，但防御性编程）
+        # digits 是一个元组，比如 (0, 9, 6) 代表 0.96 (取决于 exponent)
+        # 更简单的做法是直接操作字符串或利用数学取余，但为了严谨我们提取最后一位小数
+        
+        # 获取当前两位小数的数值 (0 到 99)
+        # 方法：将数字乘以 100 取整
+        cents = int(rounded_num * 100)
+        last_digit = cents % 10  # 获取第二位小数 (0-9)
+        
+        new_last_digit = 0
+        
+        # 第二步：应用特殊规则
+        if 1 <= last_digit <= 5:
+            new_last_digit = 0
+        elif 6 <= last_digit <= 9:
+            new_last_digit = 5
+        else:
+            # 如果是 0，保持不变
+            new_last_digit = 0
+            
+        # 重新构建数值
+        # 去掉原来的个位小数，加上新的个位小数
+        base_cents = cents - last_digit + new_last_digit
+        
+        final_num = Decimal(base_cents) / 100
+        
+        # 格式化为字符串，确保始终显示两位小数 (例如 0.20 而不是 0.2)
+        return f"{final_num:.2f}"
+        
+    except Exception:
+        # 如果转换失败（例如原本就是非数字字符串），返回原值或空字符串
+        return ""
 qingguan_router = APIRouter(tags=["清关"], prefix='/qingguan')
 
 # 包含所有子路由
@@ -101,13 +155,15 @@ def process_shipping_data(
     execute_type: str,
     export_country: str,
     port_name:str="",
+    operate_type:str = "",
     session: MongoClient = Depends(get_session),
 ):
     db = session
     exchange_rate = db.exchange_rates.find_one({"version": "latest","type":"美金人民币汇率"})
     port_detail = None
-    if port_name:
+    if operate_type=='auto' and port_name:
         port_detail = db.ports.find_one({"port_name":port_name})
+        # logger.info(f"port_detail:{port_detail}")
     num_products = sum([i.box_num for i in product_list])
     if num_products == 0:
         raise ValueError("Product list cannot be empty")
@@ -198,7 +254,9 @@ def process_shipping_data(
 
         if product.single_price:
             # sea海运
-            single_price = product.single_price
+            single_price = process_unit_price (product.single_price)
+            if port_detail and port_detail.get('expansion_factor')  and float(port_detail.get('expansion_factor')) != 1:
+                single_price = single_price*float(port_detail['expansion_factor'])
             detail_data_log = {
                 "hs_code": product_record.get("HS_CODE"),
                 "chinese_name": product_record.get("中文品名"),
@@ -213,7 +271,9 @@ def process_shipping_data(
             }
         else:
             # air空运
-            single_price = product_record.get("单价")
+            single_price = process_unit_price(product_record.get("单价"))
+            if port_detail and port_detail.get('expansion_factor')  and float(port_detail.get('expansion_factor')) != 1:
+                single_price = single_price*float(port_detail['expansion_factor'])
             detail_data_log = {
                 "hs_code": product_record.get("HS_CODE"),
                 "chinese_name": product_record.get("中文品名"),
@@ -227,8 +287,7 @@ def process_shipping_data(
                 "packing":product_record.get("件箱"),
 
             }
-        if float(port_detail['expansion_factor']) != 1:
-            single_price = single_price*float(port_detail['expansion_factor'])
+
 
         if product.packing:
             packing = product.packing
@@ -683,6 +742,7 @@ async def process_shipping_data_endpoint(
                 session=session,
         )
         else:   
+            logger.info(f"request_data:{request}")
             results, summary_log = process_shipping_data(
                 shipper_name=request.shipper_name,
                 receiver_name=request.receiver_name,
@@ -695,7 +755,8 @@ async def process_shipping_data_endpoint(
                 execute_type=request.execute_type,
                 export_country=request.export_country,
                 session=session,
-                port_name = request.port
+                port_name = request.port,
+                operate_type=request.operate_type,
         )
 
         if isinstance(results, dict) and results.get("product_attribute"):

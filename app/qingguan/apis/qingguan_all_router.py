@@ -40,7 +40,8 @@ from pymongo import MongoClient
 
 from fastapi import (
     Depends,
-    Request
+    Request,
+    UploadFile
 )
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from loguru import logger
@@ -58,6 +59,7 @@ from app.utils import (
 )
 
 from app.utils_aspose import (
+    generate_excel_from_new_template_test,
     generate_excel_from_template_canada,
     generate_excel_from_template_test,
     generate_admin_shenhe_template
@@ -65,6 +67,17 @@ from app.utils_aspose import (
 from app.db_mongo import get_session
 from urllib.parse import quote
 from decimal import Decimal, ROUND_HALF_UP
+import sys
+from pathlib import Path
+
+# # 将项目根目录添加到 Python 路径，以便导入 excel_ai 模块
+# project_root = Path(__file__).resolve().parent.parent.parent.parent
+# if str(project_root) not in sys.path:
+#     sys.path.insert(0, str(project_root))
+
+import pandas as pd
+from excel_ai.autogen_extractor import AutoGenExcelExtractor
+from excel_ai.models import ProductRecord
 
 def process_unit_price(value):
     # 1. 处理空值或非数字情况
@@ -95,9 +108,9 @@ def process_unit_price(value):
         # 方法：将数字乘以 100 取整
         cents = int(rounded_num * 100)
         last_digit = cents % 10  # 获取第二位小数 (0-9)
-        
+
         new_last_digit = 0
-        
+
         # 第二步：应用特殊规则
         if 1 <= last_digit <= 5:
             new_last_digit = 0
@@ -106,13 +119,17 @@ def process_unit_price(value):
         else:
             # 如果是 0，保持不变
             new_last_digit = 0
-            
+
         # 重新构建数值
         # 去掉原来的个位小数，加上新的个位小数
         base_cents = cents - last_digit + new_last_digit
-        
+
         final_num = Decimal(base_cents) / 100
-        
+
+        # 如果转换后为0，保持原始值
+        if final_num == 0:
+            return f"{num:.2f}"
+
         # 格式化为字符串，确保始终显示两位小数 (例如 0.20 而不是 0.2)
         return f"{final_num:.2f}"
         
@@ -162,8 +179,9 @@ def process_shipping_data(
     exchange_rate = db.exchange_rates.find_one({"version": "latest","type":"美金人民币汇率"})
     port_detail = None
     if operate_type=='auto' and port_name:
+    # if port_name:
         port_detail = db.ports.find_one({"port_name":port_name})
-        # logger.info(f"port_detail:{port_detail}")
+        logger.info(f"port_detail:{port_detail}")
     num_products = sum([i.box_num for i in product_list])
     if num_products == 0:
         raise ValueError("Product list cannot be empty")
@@ -254,9 +272,13 @@ def process_shipping_data(
 
         if product.single_price:
             # sea海运
-            single_price = process_unit_price (product.single_price)
+            # single_price = process_unit_price (product.single_price)
             if port_detail and port_detail.get('expansion_factor')  and float(port_detail.get('expansion_factor')) != 1:
-                single_price = single_price*float(port_detail['expansion_factor'])
+                single_price = float(product.single_price)*float(port_detail['expansion_factor'])
+                single_price = process_unit_price (single_price)
+            else:
+                single_price = process_unit_price (product.single_price)
+            
             detail_data_log = {
                 "hs_code": product_record.get("HS_CODE"),
                 "chinese_name": product_record.get("中文品名"),
@@ -271,9 +293,13 @@ def process_shipping_data(
             }
         else:
             # air空运
-            single_price = process_unit_price(product_record.get("单价"))
+            # single_price = process_unit_price(product_record.get("单价"))
             if port_detail and port_detail.get('expansion_factor')  and float(port_detail.get('expansion_factor')) != 1:
-                single_price = single_price*float(port_detail['expansion_factor'])
+                single_price = float(single_price)*float(port_detail['expansion_factor'])
+                single_price = process_unit_price (single_price)
+            else:
+                single_price = process_unit_price (product_record.get("单价"))            
+            
             detail_data_log = {
                 "hs_code": product_record.get("HS_CODE"),
                 "chinese_name": product_record.get("中文品名"),
@@ -330,7 +356,7 @@ def process_shipping_data(
             volume_for_this_product = round(avg_volume * box_num, 2)
             accumulated_volume += volume_for_this_product
 
-        net_weight_for_this_product = round(gross_weight_for_this_product * 0.8, 2)
+        net_weight_for_this_product = round(gross_weight_for_this_product * random.uniform(0.68, 0.72), 2)
 
         product_data = {
             "MasterBillNo": master_bill_no,
@@ -589,7 +615,7 @@ def process_shipping_data_canada(
             volume_for_this_product = round(avg_volume * box_num, 2)
             accumulated_volume += volume_for_this_product
 
-        net_weight_for_this_product = round(gross_weight_for_this_product * 0.8, 2)
+        net_weight_for_this_product = round(gross_weight_for_this_product * random.uniform(0.68, 0.72), 2)
 
         product_data = {
             "MasterBillNo": master_bill_no,
@@ -776,6 +802,8 @@ async def process_shipping_data_endpoint(
         )
         else:
             pdf_path = generate_excel_from_template_test(results, request.totalyugutax,request.port)
+            # pdf_path = generate_excel_from_new_template_test(results, request.totalyugutax,request.port)
+
             shenhe_excel_path = generate_admin_shenhe_template(
             results, request.totalyugutax
         )
@@ -902,3 +930,104 @@ def get_exchange_rate(rate_type: str="USDCNY",session: MongoClient = Depends(get
     # 12月上汇率
     rate = "7.3000"
     return {"USDCNY": rate}
+
+
+class ExcelExtractRequest(BaseModel):
+    """Excel提取请求参数"""
+    use_cache: bool = True
+    confidence_threshold: float = 0.8
+
+
+@qingguan_router.post("/extract-excel-data", summary="从Excel文件提取产品数据")
+async def extract_excel_data(
+    file: UploadFile,
+    use_cache: bool = True,
+    confidence_threshold: float = 0.8,
+):
+    """
+    从上传的Excel文件中提取产品数据（HSCODE、品名、件数、单价、材质）
+
+    返回 DataFrame 格式的数据，包含5列：HSCODE、品名、件数、单价、材质
+
+    Args:
+        file: 上传的Excel文件（.xlsx, .xls）
+        use_cache: 是否使用数据地图缓存
+        confidence_threshold: 置信度阈值
+
+    Returns:
+        JSON格式的DataFrame数据
+    """
+    # 检查文件类型
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 格式的文件")
+
+    # 读取 API 配置
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.minimaxi.com/v1")
+    model = os.environ.get("OPENAI_MODEL", "MiniMax-M2.7")
+
+    if not api_key:
+        raise HTTPException(status_code=500, detail="未配置 OPENAI_API_KEY")
+
+    # 保存上传的文件到临时位置
+    temp_dir = Path("./file/temp")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_file_path = temp_dir / file.filename
+
+    try:
+        contents = await file.read()
+        with open(temp_file_path, "wb") as f:
+            f.write(contents)
+
+        # 创建提取器
+        extractor = AutoGenExcelExtractor(
+            api_key=api_key,
+            base_url=base_url,
+            model=model
+        )
+
+        # 调用智能提取方法
+        records = extractor.extract_smart(
+            file_path=str(temp_file_path),
+            output_path=str(temp_dir / f"{file.filename}_output.xlsx"),  # 临时输出路径，不会实际使用
+            use_cache=use_cache,
+            confidence_threshold=confidence_threshold
+        )
+
+        # 将 List[ProductRecord] 转换为 DataFrame
+        if records:
+            df = pd.DataFrame([r.to_dict() for r in records])
+        else:
+            df = pd.DataFrame(columns=["HSCODE", "品名", "件数", "单价", "材质"])
+
+        # 返回 DataFrame 数据（JSON 格式）
+        return JSONResponse({
+            "status": "success",
+            "total": len(records),
+            "data": df.to_dict(orient="records"),
+            "columns": df.columns.tolist()
+        })
+
+    except Exception as e:
+        logger.error(f"Excel提取失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Excel提取失败: {str(e)}")
+    finally:
+        # 强制垃圾回收释放文件句柄，然后清理临时文件
+        import gc
+        import time
+        gc.collect()
+        time.sleep(0.2)  # 等待文件句柄释放
+
+        for _ in range(3):
+            try:
+                if temp_file_path.exists():
+                    temp_file_path.unlink()
+                output_path = temp_dir / "output.xlsx"
+                if output_path.exists():
+                    output_path.unlink()
+                break
+            except PermissionError:
+                time.sleep(0.2)
+        else:
+            logger.warning(f"临时文件无法删除，可能被占用: {temp_file_path}")
+

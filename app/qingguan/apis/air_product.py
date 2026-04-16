@@ -33,6 +33,9 @@ air_product_router = APIRouter(
 
 
 
+
+
+
 @air_product_router.get(
     "/",
     response_model=dict,
@@ -153,6 +156,139 @@ def create_product(
     product_data["id"] = str(result.inserted_id)
     product_data.pop("_id", None)
     return product_data
+
+@air_product_router.get(
+    "/output_products",
+    summary="导出产品Excel",
+)
+def output_products(
+    session: MongoClient = Depends(get_session),
+    transport_type: str = "",
+    startland: str = "China",
+    destination: str = "America",
+):
+    logger.info(f"output_products 被调用了 - startland: {startland}, destination: {destination}")
+    try:
+        db = session
+        if transport_type == "sea":
+            products = list(
+                db.products_sea.find(
+                    {"destination": destination, "startland": startland}
+                )
+            )
+        else:
+            products = list(
+                db.products.find({"destination": destination, "startland": startland})
+            )
+
+        output_products = []
+        all_jia_zheng_keys = set()
+        for product in products:
+            if "加征" in product:
+                all_jia_zheng_keys.update(product["加征"].keys())
+
+        for product in products:
+            # 计算总税率
+            duty = product.get("Duty", 0)
+            total_tax = 0  # 初始化总税率
+            try:
+                duty = float(duty)
+                total_tax = duty
+            except ValueError:
+                # duty不是数字格式时,不计算总税率
+                pass
+            piece_per_box = product.get("件箱")
+            unit_price = product.get("单价")
+            try:
+                piece_per_box = int(piece_per_box) if piece_per_box else 0
+                unit_price = float(unit_price) if unit_price else 0
+            except (ValueError, TypeError):
+                piece_per_box = 0
+                unit_price = 0
+
+            output_product = {
+                "序号": product.get("序号"),
+                "中文品名": product.get("中文品名"),
+                "英文品名": product.get("英文品名"),
+                "HS_CODE": product.get("HS_CODE"),
+                "件/箱": product.get("件箱"),
+                "单价": product.get("单价"),
+                "Duty": product.get("Duty"),
+            }
+
+            # 添加加征字段
+            jia_zheng_values = product.get("加征", {})
+            for key in all_jia_zheng_keys:
+                value = jia_zheng_values.get(key)
+                if value is not None:
+                    output_product[f"{key}"] = value
+                    if isinstance(value, (int, float, str)):
+                        try:
+                            value = float(value)
+                            total_tax += value
+                        except ValueError:
+                            pass  # 如果value不能转换为float，则跳过
+                else:
+                    output_product[f"{key}"] = (
+                        None  # 确保所有产品都有相同的加征字段, 没有的设置为None
+                    )
+
+            if transport_type == "sea":
+                single_tax = (
+                    piece_per_box * unit_price * (total_tax + 0.003464 + 0.00125)
+                )
+            else:
+                single_tax = piece_per_box * unit_price * (total_tax + 0.003464)
+            output_product.update(
+                {
+                    "总税率": f"{round(total_tax, 4) * 100}%",
+                    "单箱空运关税\n单箱海运关税": f"{round(single_tax, 4) * 100}%",
+                    "认证": product.get("认证"),
+                    "豁免代码": product.get("豁免代码"),
+                    "豁免代码含义": product.get("豁免代码含义"),
+                    "豁免截止日期说明": product.get("豁免截止日期说明"),
+                    "豁免过期后": product.get("豁免过期后"),
+                    "材质": product.get("材质"),
+                    "用途": product.get("用途"),
+                    "属性绑定工厂": product.get("属性绑定工厂"),
+                    "类别": product.get("类别"),
+                    "备注": product.get("备注"),
+                    "单件重量合理范围": product.get("单件重量合理范围"),
+                    "客户": product.get("客户"),
+                    "报关代码": product.get("报关代码"),
+                    "客人资料美金": product.get("客人资料美金"),
+                    "single_weight": product.get("single_weight"),
+                    "自税": product.get("自税"),
+                    "类型": product.get("类型"),
+                    "豁免文件名称": product.get("huomian_file_name"),
+                    "id": str(product.get("_id")),
+                    "更新时间": product.get("更新时间"),
+                    "is_hidden": product.get("is_hidden"),
+                }
+            )
+
+            output_products.append(output_product)
+
+        # 创建Excel文件
+        df = pd.DataFrame(output_products)
+        if transport_type == "sea":
+            excel_file = f"./file/output_products/products_output_sea_{datetime.now().strftime('%Y%m%d %H%M%S')}.xlsx"
+        else:
+            excel_file = f"./file/output_products/products_output_{datetime.now().strftime('%Y%m%d %H%M%S')}.xlsx"
+        os.makedirs(os.path.dirname(excel_file), exist_ok=True)
+        df.to_excel(excel_file, index=False)
+
+        # 返回Excel文件
+        return FileResponse(
+            excel_file,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=excel_file,
+        )
+    except Exception as e:
+        logger.error(f"错误为:{e}")
+        return JSONResponse({"status": "False", "content": f"错误为:{e}"})
+
+
 
 
 @air_product_router.get(
@@ -336,132 +472,4 @@ def delete_product(product_id: str, session: MongoClient = Depends(get_session))
     return product
 
 
-@air_product_router.get(
-    "/output_products",
-    summary="导出产品Excel",
-)
-def output_products(
-    session: MongoClient = Depends(get_session),
-    transport_type: str = "",
-    startland: str = "China",
-    destination: str = "America",
-):
-    try:
-        db = session
-        if transport_type == "sea":
-            products = list(
-                db.products_sea.find(
-                    {"destination": destination, "startland": startland}
-                )
-            )
-        else:
-            products = list(
-                db.products.find({"destination": destination, "startland": startland})
-            )
 
-        output_products = []
-        all_jia_zheng_keys = set()
-        for product in products:
-            if "加征" in product:
-                all_jia_zheng_keys.update(product["加征"].keys())
-
-        for product in products:
-            # 计算总税率
-            duty = product.get("Duty", 0)
-            total_tax = 0  # 初始化总税率
-            try:
-                duty = float(duty)
-                total_tax = duty
-            except ValueError:
-                # duty不是数字格式时,不计算总税率
-                pass
-            piece_per_box = product.get("件箱")
-            unit_price = product.get("单价")
-            try:
-                piece_per_box = int(piece_per_box) if piece_per_box else 0
-                unit_price = float(unit_price) if unit_price else 0
-            except (ValueError, TypeError):
-                piece_per_box = 0
-                unit_price = 0
-
-            output_product = {
-                "序号": product.get("序号"),
-                "中文品名": product.get("中文品名"),
-                "英文品名": product.get("英文品名"),
-                "HS_CODE": product.get("HS_CODE"),
-                "件/箱": product.get("件箱"),
-                "单价": product.get("单价"),
-                "Duty": product.get("Duty"),
-            }
-
-            # 添加加征字段
-            jia_zheng_values = product.get("加征", {})
-            for key in all_jia_zheng_keys:
-                value = jia_zheng_values.get(key)
-                if value is not None:
-                    output_product[f"{key}"] = value
-                    if isinstance(value, (int, float, str)):
-                        try:
-                            value = float(value)
-                            total_tax += value
-                        except ValueError:
-                            pass  # 如果value不能转换为float，则跳过
-                else:
-                    output_product[f"{key}"] = (
-                        None  # 确保所有产品都有相同的加征字段, 没有的设置为None
-                    )
-
-            if transport_type == "sea":
-                single_tax = (
-                    piece_per_box * unit_price * (total_tax + 0.003464 + 0.00125)
-                )
-            else:
-                single_tax = piece_per_box * unit_price * (total_tax + 0.003464)
-            output_product.update(
-                {
-                    "总税率": f"{round(total_tax, 4) * 100}%",
-                    "单箱空运关税\n单箱海运关税": f"{round(single_tax, 4) * 100}%",
-                    "认证": product.get("认证"),
-                    "豁免代码": product.get("豁免代码"),
-                    "豁免代码含义": product.get("豁免代码含义"),
-                    "豁免截止日期说明": product.get("豁免截止日期说明"),
-                    "豁免过期后": product.get("豁免过期后"),
-                    "材质": product.get("材质"),
-                    "用途": product.get("用途"),
-                    "属性绑定工厂": product.get("属性绑定工厂"),
-                    "类别": product.get("类别"),
-                    "备注": product.get("备注"),
-                    "单件重量合理范围": product.get("单件重量合理范围"),
-                    "客户": product.get("客户"),
-                    "报关代码": product.get("报关代码"),
-                    "客人资料美金": product.get("客人资料美金"),
-                    "single_weight": product.get("single_weight"),
-                    "自税": product.get("自税"),
-                    "类型": product.get("类型"),
-                    "豁免文件名称": product.get("huomian_file_name"),
-                    "id": str(product.get("_id")),
-                    "更新时间": product.get("更新时间"),
-                    "is_hidden": product.get("is_hidden"),
-                }
-            )
-
-            output_products.append(output_product)
-
-        # 创建Excel文件
-        df = pd.DataFrame(output_products)
-        if transport_type == "sea":
-            excel_file = f"./file/output_products/products_output_sea_{datetime.now().strftime('%Y%m%d %H%M%S')}.xlsx"
-        else:
-            excel_file = f"./file/output_products/products_output_{datetime.now().strftime('%Y%m%d %H%M%S')}.xlsx"
-        os.makedirs(os.path.dirname(excel_file), exist_ok=True)
-        df.to_excel(excel_file, index=False)
-
-        # 返回Excel文件
-        return FileResponse(
-            excel_file,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            filename=excel_file,
-        )
-    except Exception as e:
-        logger.error(f"错误为:{e}")
-        return JSONResponse({"status": "False", "content": f"错误为:{e}"})

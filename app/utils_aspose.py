@@ -217,7 +217,7 @@ class AsposeCellsNETHandler:
             civ_sheet = wb.Worksheets["CIV"]
             pl_sheet = wb.Worksheets["PL"]
             huomian_explaination_sheet = wb.Worksheets["豁免说明"]
-
+            
             # 填充CIV工作表内容
             if data and len(data) > 0:
                 # 填充头部信息
@@ -336,6 +336,216 @@ class AsposeCellsNETHandler:
                     # all_pic_path.append({"pic_path":pic_path,"new_name":item['DESCRIPTION']})
                     huomian_explaination_sheet.AutoFitRow(huomian_row - 1)
                     huomian_explaination_sheet.Cells.InsertRow(huomian_row)
+
+            # 创建输出目录
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+            # 保存Excel文件
+            master_bill_no = (
+                data[0].get("MasterBillNo", "unknown") if data else "unknown"
+            )
+            output_path = os.path.join(
+                output_dir, f"{time.time()}-{master_bill_no} CI&PL-{totalyugutax}.xlsx"
+            )
+            wb.CalculateFormula()
+            wb.Save(output_path, SaveFormat.Xlsx)
+
+            return output_path
+        except Exception as e:
+            raise Exception(f"生成Excel文件时出错: {str(e)}")
+    def generate_excel_from_new_template(
+        self, template_path, data, port, totalyugutax, output_dir="file"
+    ):
+        """
+        根据新模板生成Excel文件
+
+        Args:
+            template_path (str): 模板文件路径
+            data (list): 数据列表
+            output_dir (str): 输出目录
+
+        Returns:
+            str: 生成的Excel文件路径
+        """
+        try:
+            # 打开模板文件
+            wb = Workbook(template_path)
+            civ_sheet = wb.Worksheets["INV"]
+            pl_sheet = wb.Worksheets["PL"]
+            huomian_explaination_sheet = wb.Worksheets["Product information"]
+
+            # 填充CIV工作表内容
+            if data and len(data) > 0:
+                # 填充头部信息
+                self.set_cell_value(civ_sheet, 2, 1, data[0].get("shipper_name", ""))
+                
+                self.set_cell_value(civ_sheet, 3, 1, data[0].get("shipper_address", ""))
+
+                receiver_info = f"{data[0].get('receiver_name', '')}\n{data[0].get('receiver_address', '')}"
+                self.set_cell_value(civ_sheet, 6, 3, receiver_info)
+
+                # 生成文档编号
+                today_minus_5 = datetime.now() - timedelta(days=5)
+                formatted_date = today_minus_5.strftime("%Y%m%d")
+                random_number = random.randint(1000, 9999)
+                doc_number = f"{formatted_date}{random_number}"
+
+                self.set_cell_value(civ_sheet, 10, 10, doc_number)
+                self.set_cell_value(civ_sheet, 11, 10, doc_number)
+
+
+                # 填充PL工作表内容
+                self.set_cell_value(pl_sheet, 2, 1, data[0].get("shipper_name", ""))
+                self.set_cell_value(pl_sheet, 3, 1, data[0].get("shipper_address", ""))
+                self.set_cell_value(pl_sheet, 6, 3, receiver_info)
+                self.set_cell_value(pl_sheet, 10, 10, doc_number)
+                self.set_cell_value(pl_sheet, 11, 10, doc_number)
+
+                self.set_cell_value(huomian_explaination_sheet, 2, 1, data[0].get("shipper_name", ""))
+                self.set_cell_value(huomian_explaination_sheet, 3, 1, data[0].get("shipper_address", ""))
+                self.set_cell_value(huomian_explaination_sheet, 6, 3, receiver_info)
+                self.set_cell_value(huomian_explaination_sheet, 10, 10, doc_number)
+                self.set_cell_value(huomian_explaination_sheet, 11, 10, doc_number)
+
+                if data[0]["export_country"] == "Vietnam":
+                    self.set_cell_value(pl_sheet,10, 3, "VIETNAM")
+                    self.set_cell_value(civ_sheet, 10, 3, "VIETNAM")
+                    self.set_cell_value(huomian_explaination_sheet, 10, 3, "VIETNAM")
+
+
+                if data[0]["execute_type"] == "Sea":
+                    self.set_cell_value(civ_sheet, 11, 3, "SEA")
+                    self.set_cell_value(pl_sheet, 11, 3, "SEA")
+                    self.set_cell_value(huomian_explaination_sheet, 11, 3, "SEA")
+
+
+
+                # 填充数据行
+                start_row = 14
+                for index, item in enumerate(data):
+                    civ_row = start_row + index
+                    pl_row = start_row  + index  
+                    huomian_row = start_row + index
+                    # CIV表数据
+                    self.set_cell_value(civ_sheet, civ_row, 1, index + 1)
+                    self.set_cell_value(civ_sheet, civ_row, 2, item.get("HS_CODE", ""))
+                    self.set_cell_value(
+                        civ_sheet, civ_row, 3, item.get("DESCRIPTION", "")
+                    )
+                    self.set_cell_value(civ_sheet, civ_row, 4, item.get("texture", ""))
+
+                    self.set_cell_value(civ_sheet, civ_row, 5, item.get("quanity", ""))
+                    self.set_cell_value(civ_sheet, civ_row, 6, item.get("danwei", ""))
+                    self.set_cell_value(
+                        civ_sheet, civ_row, 7, item.get("unit_price", "")
+                    )
+                    self.set_cell_value(
+                        civ_sheet, civ_row, 8, round(item.get("total_price", 0))
+                    )
+                    self.set_cell_value(
+                        civ_sheet, civ_row, 9, item.get("address_name", "")
+                    )
+                    self.set_cell_value(civ_sheet, civ_row, 10, item.get("address", ""))
+                    # self.set_cell_value(civ_sheet, civ_row, 11, item.get("note", ""))
+
+                    # 自动调整行高
+                    civ_sheet.AutoFitRow(civ_row - 1)
+                    if index < len(data) - 1:
+                        civ_sheet.Cells.InsertRow(civ_row)
+
+                    # PL表数据
+                    # self.set_cell_value(pl_sheet, pl_row, 1, index + 1)
+                    self.set_cell_value(pl_sheet, pl_row, 2, item.get("HS_CODE", ""))
+                    self.set_cell_value(
+                        pl_sheet, pl_row, 3, item.get("DESCRIPTION", "")
+                    )
+                    self.set_cell_value(pl_sheet, pl_row, 4, item.get("carton", ""))
+
+                    self.set_cell_value(pl_sheet, pl_row, 5, item.get("quanity", ""))
+                    self.set_cell_value(pl_sheet, pl_row, 6, item.get("danwei", ""))
+                    self.set_cell_value(
+                        pl_sheet, pl_row, 7, item.get("GrossWeight", "")
+                    )
+                    self.set_cell_value(pl_sheet, pl_row, 8, item.get("net_weight", ""))
+
+                    # self.set_cell_value(pl_sheet, pl_row, 10, item.get("Volume", ""))
+
+                    # 自动调整行高
+                    pl_sheet.AutoFitRow(pl_row - 1)
+                    if index < len(data) - 1:
+                        pl_sheet.Cells.InsertRow(pl_row)
+
+                    # Fill 豁免说明
+                    self.set_cell_value(
+                        huomian_explaination_sheet, huomian_row, 1,index+1
+                    )
+                    self.set_cell_value(
+                        huomian_explaination_sheet, huomian_row, 2, item["DESCRIPTION"]
+                    )
+                    self.set_cell_value(
+                        huomian_explaination_sheet, huomian_row, 3, ""
+                    )
+                    self.set_cell_value(
+                        huomian_explaination_sheet, huomian_row, 4, ""
+                    )
+
+                    # if item["huomian_file_name"]:
+                    #     pic_path = os.path.join("./file/huomian_file/",item["huomian_file_name"])
+
+                    # all_pic_path.append({"pic_path":pic_path,"new_name":item['DESCRIPTION']})
+                    huomian_explaination_sheet.AutoFitRow(huomian_row - 1)
+                    huomian_explaination_sheet.Cells.InsertRow(huomian_row)
+
+                # 合并单元格并设置居中对齐
+                if len(data) > 1:
+                    # CIV表格：合并第9列和第10列
+                    # 先取消模板中可能存在的合并区域
+                    try:
+                        # 取消第9列的所有合并（尝试更大的范围）
+                        civ_sheet.Cells.UnMerge(start_row - 1, 8, 20, 1)
+                    except:
+                        pass
+
+                    # 第9列合并（address_name）
+                    civ_sheet.Cells.Merge(start_row - 1, 8, len(data), 1)
+                    cell_col9 = civ_sheet.Cells[start_row - 1, 8]
+                    style_col9 = cell_col9.GetStyle()
+                    style_col9.HorizontalAlignment = TextAlignmentType.Center
+                    style_col9.VerticalAlignment = TextAlignmentType.Center
+                    cell_col9.SetStyle(style_col9)
+
+                    try:
+                        # 取消第10列的所有合并（尝试更大的范围）
+                        civ_sheet.Cells.UnMerge(start_row - 1, 9, 20, 1)
+                    except:
+                        pass
+
+                    # 第10列合并（address）
+                    civ_sheet.Cells.Merge(start_row - 1, 9, len(data), 1)
+                    cell_col10 = civ_sheet.Cells[start_row - 1, 9]
+                    style_col10 = cell_col10.GetStyle()
+                    style_col10.HorizontalAlignment = TextAlignmentType.Center
+                    style_col10.VerticalAlignment = TextAlignmentType.Center
+                    cell_col10.SetStyle(style_col10)
+
+                    # PL表格：合并第4列并求和（carton）
+                    # 计算第4列的总和
+                    carton_sum = sum(item.get("carton", 0) for item in data)
+
+                    try:
+                        # 取消第4列的所有合并（尝试更大的范围）
+                        pl_sheet.Cells.UnMerge(start_row - 1, 3, 20, 1)
+                    except:
+                        pass
+
+                    # 合并第4列
+                    pl_sheet.Cells.Merge(start_row - 1, 3, len(data), 1)
+                    cell_pl_col4 = pl_sheet.Cells[start_row - 1, 3]
+                    cell_pl_col4.PutValue(carton_sum)
+                    style_pl_col4 = cell_pl_col4.GetStyle()
+                    style_pl_col4.HorizontalAlignment = TextAlignmentType.Center
+                    style_pl_col4.VerticalAlignment = TextAlignmentType.Center
+                    cell_pl_col4.SetStyle(style_pl_col4)
 
             # 创建输出目录
             Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -633,7 +843,7 @@ class AsposeCellsNETHandler:
             saveOption.Compliance = PdfCompliance.Pdf14
             saveOption.DisplayDocTitle = True
 
-            pdf_file = f"./pdf/customs/{data[0]}.pdf"
+            pdf_file = f"./pdf/customs/{data[0]}-{time.time()}.pdf"
 
             wb.Save(pdf_file, saveOption)
             return pdf_file
@@ -758,7 +968,7 @@ class AsposeCellsNETHandler:
             # 设置PDF文件的完整保存路径
             # totalyugutax = data["other_data"]["totalyugutax"]
             # pdf_file = f"./pdf/customs/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}-{data['master_bill_no']}-{totalyugutax}.pdf"
-            pdf_file = f"./pdf/customs/{data['master_bill_no']}.pdf"
+            pdf_file = f"./pdf/customs/{data.get('pdf_name', data['master_bill_no'])}_{time.time()}.pdf"
 
             # 保存为PDF
             wb.Save(pdf_file, saveOption)
@@ -1151,7 +1361,38 @@ def generate_excel_from_template_test(
     print(f"generate_excel_from_template_test 运行时间: {end_time - start_time:.2f} 秒")
 
     return pdf_path
+def generate_excel_from_new_template_test(
+    data,
+    totalyugutax,
+    port,
+    template_path="./file/excel_template/CI&PL 模版.xlsx",
+):
+    """
+    根据模板生成Excel文件并转换为PDF（兼容性函数）
 
+    Args:
+        data: 数据
+        totalyugutax: 预估总税金
+        port: 港口
+        template_path: 模板路径
+
+    Returns:
+        str: 生成的PDF文件路径
+    """
+    start_time = time.time()
+    # handler = AsposeCellsNETHandler()
+
+    # 生成Excel文件
+    excel_path = handler.generate_excel_from_new_template(
+        template_path, data, port, totalyugutax
+    )
+
+    # 转换为PDF
+    pdf_path = handler.excel_to_pdf(excel_path, "pdf")
+    end_time = time.time()
+    print(f"generate_excel_from_template_test 运行时间: {end_time - start_time:.2f} 秒")
+
+    return pdf_path
 
 def generate_fencangdan_file(data):
     """

@@ -112,12 +112,12 @@ task_logger.add(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.start()
+    # scheduler.start()
     yield
     # if jpype.isJVMStarted():
     #     jpype.shutdownJVM()
 
-    scheduler.shutdown()
+    # scheduler.shutdown()
 
 
 # 定义FastAPI应用
@@ -243,7 +243,7 @@ def cron_job():
     # 初始化 Hubs 客户端和端口映射
     hubs_client = HubsClient()
     today = datetime.now()
-    one_month_ago = today - timedelta(days=30)
+    one_month_ago = today - timedelta(days=90)
     one_month_later = today + timedelta(days=30)
     s_date = one_month_ago.strftime("%Y-%m-%d")
     e_date = one_month_later.strftime("%Y-%m-%d")
@@ -511,9 +511,9 @@ def get_latest_usd_cny_rate():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app=app, host="0.0.0.0", port=8085)
+    # uvicorn.run(app=app, host="0.0.0.0", port=8085)
     # get_latest_usd_cny_rate()
-    # cron_job()
+    cron_job()
     # send_email_qingguan_history()
     #
     # cron_job()

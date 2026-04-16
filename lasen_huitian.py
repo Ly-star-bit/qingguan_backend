@@ -20,7 +20,22 @@ def format_zip_code(zip_code):
     try:
         if zip_code is None or zip_code == "":
             return ""
-        return str(int(float(zip_code)))
+        
+        zip_str = str(zip_code).strip()
+        
+        # 处理 ZIP+4 格式（如 12345-6789）
+        if '-' in zip_str:
+            parts = zip_str.split('-')
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                return f"{parts[0].zfill(5)}-{parts[1].zfill(4)}"
+        
+        # 处理标准5位邮编
+        if zip_str.isdigit():
+            return zip_str.zfill(5)
+        
+        # 其他数字形式
+        return str(int(float(zip_str))).zfill(5)
+    
     except (ValueError, TypeError):
         return ""
 
@@ -355,5 +370,6 @@ if __name__ == "__main__":
         run_scheduler(interval)
     else:
         main()
-
-    # process_excel_to_json2(is_binary=False, excel_content=r"C:\Users\a1337\Desktop\数据汇总-赫泊斯美空-1.30.xlsx")
+    # hubs_client = HubsClient()
+    # all_fbx_address = hubs_client.get_base_fbx_addr(pagesize=999)
+    # process_excel_to_json2(is_binary=False, excel_content=r"C:\Users\a1337\Desktop\数据汇总-赫泊斯美空-1.30.xlsx",all_fbx_address=all_fbx_address)

@@ -5,6 +5,7 @@ from fastapi import (
     Request,
     status,
 )
+from loguru import logger
 
 from app.db_mongo import enforcer
 
@@ -27,12 +28,14 @@ async def require_products_permission(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthenticated: missing sub",
         )
-
     obj = request.url.path
     act = request.method
+    logger.info(f"require_products_permission - obj: {obj}, act: {act}")
+
     env = {"startland": startland, "destination": destination}
     # 根据你的模型：(sub, obj, act, attrs) 进行 ABAC 鉴权
     allowed = enforcer.enforce(subject, obj, act, env)
+    print(f"是否允许:{allowed}")
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="startland没有权限"

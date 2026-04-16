@@ -298,10 +298,8 @@ class HubsClient:
 
         data = {
             "id": track_id,
-            "loginpwd": sm3_decrypt("admin123")
-            if not self.password
-            else sm3_decrypt(self.password),
-            "loginuser": "admin" if not self.username else self.username,
+            "loginpwd": sm3_decrypt(os.environ.get("HUBS_PASS", "")) if not self.password else sm3_decrypt(self.password),
+            "loginuser": os.environ.get("HUBS_USER") if not self.username else self.username,
             "track": track_data,
         }
 
@@ -916,6 +914,93 @@ class HubsClient:
             logger.error(f"Unknown error while getting ship addr: {e}")
             return None
 
+    def get_zginfo_list(
+        self,
+        start_date=None,
+        end_date=None,
+        transport_type="全部",
+        sel_type="operno",
+        ids=None,
+        searchlist=None,
+        pagesize=500,
+    ):
+        """
+        通过日期范围获取总单列表（自动分页获取全部数据）
+        :param start_date: 开始日期，格式 YYYY-MM-DD，默认为一个月前
+        :param end_date: 结束日期，格式 YYYY-MM-DD，默认为今天
+        :param transport_type: 运输类型，默认为"全部"
+        :param sel_type: 查询类型，默认为"operno"
+        :param ids: ID 列表
+        :param searchlist: 搜索条件列表
+        :param pagesize: 每页数量 (default: 500)
+        :return: List of 总单 (完整的 list 数据) or None if request fails
+        """
+        url = "https://admin.hubs-scs.com/api/v1/oms/oms_zginfo/getlist"
+
+        if start_date is None:
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+
+        all_results = []
+        current_page = 1
+
+        while True:
+            payload = {
+                "pageindex": current_page,
+                "pagesize": pagesize,
+                "open_search": False,
+                "sorts": [],
+                "s_date": start_date,
+                "e_date": end_date,
+                "transport_type": transport_type,
+                "sel_type": sel_type,
+                "ids": ids if ids else [],
+                "searchlist": searchlist if searchlist else [],
+            }
+
+            try:
+                response = self.httpx_client.post(url, json=payload, timeout=60)
+                data = response.json()
+                self.update_token(response.headers)
+
+                if not data.get("success") or "data" not in data:
+                    logger.error(
+                        f"Failed to get zginfo list (page {current_page}): {data.get('message', 'Unknown error')}"
+                    )
+                    return None
+
+                page_data = data["data"]
+                page_list = page_data.get("list", [])
+
+                if not page_list:
+                    break
+
+                all_results.extend(page_list)
+
+                total_count = page_data.get("totalCount", 0)
+                current_count = len(all_results)
+
+                logger.info(f"已获取 {current_count}/{total_count} 条总单数据 (第{current_page}页)")
+
+                if current_count >= total_count:
+                    break
+
+                current_page += 1
+
+            except httpx.RequestError as e:
+                logger.error(f"Request error while getting zginfo list (page {current_page}): {e}")
+                return None
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error while getting zginfo list (page {current_page}): {e}")
+                return None
+            except Exception as e:
+                logger.error(f"Unknown error while getting zginfo list (page {current_page}): {e}")
+                return None
+
+        logger.info(f"获取完成，共 {len(all_results)} 条总单数据")
+        return all_results
+
     def get_bigwaybill_orders_list(
         self,
         start_date=None,
@@ -923,7 +1008,7 @@ class HubsClient:
         operno_list=None,
         transport_type="全部",
         dsid_list=None,
-        pagesize=50,
+        pagesize=500,
     ):
         """
         通过日期范围获取大货运单列表（自动分页获取全部数据）

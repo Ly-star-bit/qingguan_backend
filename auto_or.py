@@ -96,7 +96,55 @@ def fetch_products_from_api(
     except Exception as e:
         print(f"❌ 获取API数据时发生错误: {e}")
         return None
+from decimal import Decimal, ROUND_HALF_UP
 
+def process_unit_price(value):
+    # 1. 处理空值或非数字情况
+    if value is None or value == "":
+        return Decimal(0)  # 统一返回 Decimal 类型
+    
+    try:
+        # 转换为 Decimal 以保证精度
+        # 如果输入是字符串，直接转；如果是 float，先转字符串再转 Decimal 避免浮点误差
+        if isinstance(value, float):
+            num = Decimal(str(value))
+        else:
+            num = Decimal(str(value))
+            
+        # 第一步：标准四舍五入保留两位小数
+        # quantize(Decimal('0.01')) 配合 ROUND_HALF_UP 实现标准的四舍五入
+        rounded_num = num.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        
+        # 获取当前两位小数的数值 (0 到 99)
+        # 方法：将数字乘以 100 取整
+        cents = int(rounded_num * 100)
+        last_digit = cents % 10  # 获取第二位小数 (0-9)
+        
+        new_last_digit = 0
+        
+        # 第二步：应用特殊规则
+        if 1 <= last_digit <= 5:
+            new_last_digit = 0
+        elif 6 <= last_digit <= 9:
+            new_last_digit = 5
+        else:
+            # 如果是 0，保持不变
+            new_last_digit = 0
+            
+        # 重新构建数值
+        # 去掉原来的个位小数，加上新的个位小数
+        base_cents = cents - last_digit + new_last_digit
+        
+        final_num = Decimal(base_cents) / 100
+                # 如果转换后为0，保持原始值
+        if final_num == 0:
+            return f"{num:.2f}"
+        # 修改点：直接返回 Decimal 数字对象，不再格式化为字符串
+        return final_num
+        
+    except Exception:
+        # 如果转换失败（例如原本就是非数字字符串），返回 Decimal(0)
+        return Decimal(0)
 
 def optimize_packing_selection(
     products_data: List[Dict],
@@ -167,20 +215,24 @@ def optimize_packing_selection(
             # 数据准备
             names = [p["name"] for p in products_data]
             unit_prices = [
-                p["price"] * (expansion_factor or 1.0) for p in products_data
+                process_unit_price(Decimal(str(p["price"])) * Decimal(str(expansion_factor or 1.0))) for p in products_data
             ]
             pcs_per_box = [p["pcs_per_box"] for p in products_data]
             tax_rates = [p["tax_rate"] for p in products_data]
 
             # 重量范围处理
             avg_w_box = W_target / B_target if B_target > 0 else 0
-            min_weights, max_weights = [], []
+            min_weights, max_weights, min_boxes_list, target_boxes_list = [], [], [], []
             for p in products_data:
                 mi, ma = p.get("min_weight_per_box", 0), p.get("max_weight_per_box", 0)
                 if not ma or ma <= 0:
                     mi, ma = avg_w_box - 7, avg_w_box + 7
                 min_weights.append(mi)
                 max_weights.append(ma)
+                # 每个产品单独的 min_boxes，没有则使用全局 min_boxes_per_product
+                min_boxes_list.append(p.get("min_boxes") if p.get("min_boxes") is not None else min_boxes_per_product)
+                # target_boxes：如果有且不为空，则箱数固定
+                target_boxes_list.append(p.get("target_boxes"))
 
             # 随机化重量以避开局部最优
             dups = {val for val, count in Counter(min_weights).items() if count > 1}
@@ -191,8 +243,9 @@ def optimize_packing_selection(
 
             val_per_box = [unit_prices[i] * pcs_per_box[i] for i in range(n)]
             tax_per_box = [
-                val_per_box[i] * tax_rates[i] * exchange_rate for i in range(n)
+                float(val_per_box[i]) * float(Decimal(str(tax_rates[i]))) * float(Decimal(str(exchange_rate))) for i in range(n)
             ]
+            val_per_box = [float(v) for v in val_per_box]
 
             # 目标函数与约束
             model += lp.lpSum([tax_per_box[i] * b[i] for i in range(n)])
@@ -209,8 +262,13 @@ def optimize_packing_selection(
             model += lp.lpSum([z[i] for i in range(n)]) == k
 
             for i in range(n):
-                model += b[i] >= min_boxes_per_product * z[i]
-                model += b[i] <= B_target * z[i]
+                if target_boxes_list[i] is not None and target_boxes_list[i] > 0:
+                    # 固定箱数的产品
+                    model += b[i] == target_boxes_list[i] * z[i]
+                else:
+                    # 非固定箱数，使用 min_boxes 约束
+                    model += b[i] >= min_boxes_list[i] * z[i]
+                    model += b[i] <= B_target * z[i]
                 model += w[i] >= min_weights[i] * b[i]
                 model += w[i] <= max_weights[i] * b[i]
 

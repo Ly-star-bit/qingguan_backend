@@ -526,6 +526,54 @@ def backup_and_update_products_price():
         remote_client.close()
 
 
+def restore_products_price():
+    """
+    恢复products集合的单价，将每个文档的'单价'字段除以1.1，并四舍五入保存2位小数
+    操作远程MongoDB
+    """
+    try:
+        # 连接远程MongoDB
+        remote_uri = f"mongodb://{REMOTE_MONGO_CONFIG['username']}:{REMOTE_MONGO_CONFIG['password']}@{REMOTE_MONGO_CONFIG['host']}:{REMOTE_MONGO_CONFIG['port']}"
+        remote_client = MongoClient(remote_uri)
+        remote_db = remote_client[REMOTE_MONGO_CONFIG['database']]
+
+        products_collection = remote_db['products']
+
+        # 读取所有文档
+        documents = list(products_collection.find())
+        doc_count = len(documents)
+        
+        print(f"读取到 {doc_count} 条products文档")
+
+        # 恢复单价字段 / 1.1 并四舍五入保留2位小数
+        restored_count = 0
+        for doc in documents:
+            单价 = doc.get('单价')
+            if 单价 is not None:
+                try:
+                    # 尝试转换为浮点数并除以1.1，然后四舍五入保留2位小数
+                    new_price = round(float(单价) / 1.1, 2)
+                    print(f"文档 {doc.get('_id')}: 原单价={单价}, 恢复后={new_price}")
+                    products_collection.update_one(
+                        {'_id': doc['_id']},
+                        {'$set': {'单价': str(new_price)}}
+                    )
+                    restored_count += 1
+                    # if restored_count >= 1:
+                    #     break
+                except (ValueError, TypeError) as e:
+                    print(f"警告: 文档 {doc.get('_id')} 的单价 '{单价}' 转换失败: {e}")
+
+        print(f"已恢复 {restored_count} 条文档的单价字段 (/1.1, 四舍五入保留2位小数)")
+        print("操作完成")
+
+    except Exception as e:
+        print(f"操作过程中发生错误: {str(e)}")
+
+    finally:
+        remote_client.close()
+
+
 if __name__ == "__main__":
     # 选择要执行的同步函数：
     # sync_collections() - 将本地数据同步到线上
@@ -536,6 +584,7 @@ if __name__ == "__main__":
     # copy_local_to_remote_new_database() - 将本地数据库全部复制到线上新数据库qingguan2-latest
     # copy_remote_collections_between_databases() - 将qingguan数据库的两个集合复制到qingguan2-latest数据库
     # backup_and_update_products_price() - 备份products到products_old，并将单价*1.1
+    # restore_products_price() - 恢复products的单价，将单价/1.1并四舍五入保留2位小数
 
     # 调用新函数
-    backup_and_update_products_price()
+    restore_products_price()

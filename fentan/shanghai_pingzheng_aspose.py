@@ -7,6 +7,7 @@
  '''
 
 import os
+import re
 import pandas as pd
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -14,6 +15,7 @@ import sys
 from loguru import logger
 import clr
 from rpa_tools.utils.morelink_api import MoreLinkClient
+from app.tools_auto.utils.hubs.hubs_client import HubsClient
 
 from rpa_tools import find_playwright_node_path
 
@@ -33,12 +35,12 @@ from Aspose.Cells import Workbook, SaveFormat,License
 
 
 
-def check_missing_worknums(work_num_str, dahuo_data):
+def check_missing_worknums(work_num_str, dahuo_data, key="operNo"):
     # 将逗号分隔的字符串转换为工作号集合
-    expected_worknums = set(work_num_str.strip().split(','))
+    expected_worknums = set(split_work_nums(work_num_str))
 
     # 创建一个集合来存储dahuo_data中存在的工作号
-    existing_worknums = {worknum["operNo"] for worknum in dahuo_data}
+    existing_worknums = {worknum[key] for worknum in dahuo_data}
 
     # 找出缺失的工作号
     missing_worknums = expected_worknums - existing_worknums
@@ -50,6 +52,50 @@ def check_missing_worknums(work_num_str, dahuo_data):
     else:
         # logger.info("所有大货号都存在")
         return []
+
+
+def split_work_nums(work_num_str):
+    """
+    分割工号字符串，支持逗号、换行分隔，或直接提取 A/S 开头的工号。
+    例如: "A123,S456\nS789" 或 "A123A456S789" 都能正确分割。
+    """
+    # 先按逗号和换行分隔
+    parts = re.split(r'[,;\n]+', work_num_str)
+    result = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        # 如果包含 A 或 S 开头的连续字符（如 A123A456S789），进一步拆分
+        matches = re.findall(r'[AS]\d+[A-Z0-9]*', part)
+        if matches:
+            result.extend(matches)
+        else:
+            result.append(part)
+    return result
+
+
+def extract_date_from_worknum(work_num):
+    """
+    从工号中提取年月日期，如 A202601 → datetime(2026, 1, 1)
+    工号格式: A/S + 年份(2位) + 月份(2位)，如 A202601
+    """
+    match = re.search(r'[AS](\d{2})(\d{2})\d{2}', work_num)
+    if match:
+        year = int(match.group(1)) + 2000  # 26 → 2026
+        month = int(match.group(2))
+        return datetime(year, month, 1)
+    return None
+
+
+def hubs_zongdan_filter_json_data(data_list, orderno=None, billno=None):
+    filtered_data = [
+        data
+        for data in data_list
+        if (orderno is None or data.get("orderno") == orderno)
+        and (billno is None or data.get("bl_no") == billno)
+    ]
+    return filtered_data
 
 
 
@@ -305,7 +351,189 @@ def execute(file_path):
 
     finally:
         pass
-        
+
+
+def pingzheng_hubs_execute(file_path, start_date=None, end_date=None):
+    hubs_client = HubsClient()
+
+    # 使用 ExcelFile 来打开文件
+    xls = pd.ExcelFile(file_path)
+
+    # 现在使用 ExcelFile 对象来指定 sheet_name
+    sample_sheet = pd.read_excel(xls, sheet_name='sample',skiprows=2)
+
+    # 从 Excel 中提取日期范围
+    if start_date is None or end_date is None:
+        all_dates = []
+        for _, row in sample_sheet.iterrows():
+            if not row["运单号"]:
+                continue
+            origin_billno = str(row["运单号"])
+            work_nums = re.findall(r'[AS]\d{6}', origin_billno)
+            for wn in work_nums:
+                dt = extract_date_from_worknum(wn)
+                if dt:
+                    all_dates.append(dt)
+        if all_dates:
+            min_date = min(all_dates)
+            max_date = max(all_dates)
+            # 扩展日期范围以确保覆盖完整月份
+            start_date = (min_date - relativedelta(days=15)).strftime("%Y-%m-%d")
+            end_date = (max_date + relativedelta(months=1)).strftime("%Y-%m-%d")
+        else:
+            # 默认最近6个月
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            start_date = (datetime.now() - relativedelta(months=6)).strftime("%Y-%m-%d")
+
+    zongdan_json_data = hubs_client.get_zginfo_list(start_date=start_date, end_date=end_date)
+    dahuo_all_data = hubs_client.get_bigwaybill_orders_list(start_date=start_date, end_date=end_date, pagesize=5000)
+
+    try:
+
+        # #系数
+        # xishu = sample_sheet.columns[-6]
+        all_fix_data = []
+        for index,row in sample_sheet.iterrows():
+            row = row.fillna(0).infer_objects(copy=False)
+            # logger.info(row["运单号"])
+            if not row["运单号"]:
+                continue
+            fix_data = {
+
+                #提单号
+                "billno":"",
+                #提单号是否存在
+                "billno_exist": "不存在",
+                #大货单号
+                "dahuo_no":"",
+                #大货单号是否存在
+                "dahuo_no_exist":"",
+                  #A#是否属于提单号
+                "A#_right":False,
+                #报关方式
+                "custom_type":"",
+                #需要分摊的a#个数
+                "need_fentan_a#_count":0
+
+
+            }
+
+
+
+            #运单号
+            origin_billno = str(row.iloc[2])
+
+            if  "_" in origin_billno:
+                #提单号
+                bill_no = origin_billno.split("_")[0][:3] + "-"  + origin_billno.split("_")[0][3:]
+                fix_data["billno"] = bill_no
+                #分单号，大货单号 - 使用正则提取 A/S 开头 + 年份(26/27/28) + 月份(01-12) 的模式
+                work_num_list = re.findall(r'[AS]\d{6}', origin_billno)
+                work_num_str = ",".join(work_num_list)
+                fix_data["dahuo_no"] = work_num_str
+
+                #判断提单号是否存在
+                filter_zongdan_data = hubs_zongdan_filter_json_data(zongdan_json_data,billno=bill_no)
+                if filter_zongdan_data:
+                    # logger.info(f"{bill_no}存在")
+                    fix_data["billno_exist"] = "存在"
+                dahuo_data = [data for data in dahuo_all_data if data.get('operno') in set(split_work_nums(work_num_str))]
+                #判断分单号是否存在
+                missing = check_missing_worknums(work_num_str, dahuo_data, key="operno")
+                if missing:
+                    logger.warning(f"存在没有大货号{missing}")
+                    fix_data["dahuo_no_exist"] = "不存在"
+                    #录入 '报错' 到空单元格
+                    all_fix_data.append(fix_data)
+                    continue
+                fix_data["dahuo_no_exist"] = "存在"
+                #a#是否属于提单号
+                work_num_list = split_work_nums(work_num_str)
+                dahuo_data_bill_no_list = [i['operno'] for i in [data for data in dahuo_all_data if data.get('bl_no') in set(bill_no.split(','))]]
+                # 将列表转换为集合并比较
+                if set(work_num_list).issubset(set(dahuo_data_bill_no_list)):
+                    fix_data["A#_right"] = True
+                else:
+                    fix_data["A#_right"] = False
+                #获取报关方式
+                bg_mode = {i["bg_mode"] for i in dahuo_data}
+                fix_data["custom_type"] =    ",".join(list(bg_mode))
+
+                #需要分摊的个数
+                fix_data["need_fentan_a#_count"] = len(work_num_list)
+                #需要分摊的A#
+
+            else:
+                #提单号
+                bill_no = origin_billno.strip()[:3] + "-"  + origin_billno.strip()[3:]
+                fix_data["billno"] = bill_no
+                #判断提单号是否存在
+                filter_zongdan_data = hubs_zongdan_filter_json_data(zongdan_json_data,billno=bill_no)
+                if filter_zongdan_data:
+                    # logger.info(f"{bill_no}存在")
+                    fix_data["billno_exist"] = "存在"
+                if row["备注"] == '买单费':
+                    dahuo_data = [data for data in dahuo_all_data if data.get('bl_no') in set(bill_no.split(','))]
+
+                    if dahuo_data:
+                        ##需要分摊的个数
+                        fix_data["need_fentan_a#_count"] = len(dahuo_data)
+                        #需要分摊的A#
+
+
+            all_fix_data.append(fix_data)
+            # 确保数据类型兼容性，将值转换为字符串类型
+            values_list = [str(value) for value in fix_data.values()]
+            # 使用 .astype(object) 确保列类型兼容性，避免 FutureWarning
+            for i, value in enumerate(values_list):
+                sample_sheet.iloc[index, 22 + i] = value
+        #写入sample表
+        all_data = [list(i.values())for i in all_fix_data]
+        new_file_path = write_data_to_excel_aspose(data=all_data,start_row=4,start_column="w",sheet_name="sample",file_path=file_path,save_new_file=True)
+
+        #分摊
+        new_sample_sheet = pd.read_excel(rf"{new_file_path}",sheet_name="sample",skiprows=2)
+        new_sample_sheet = new_sample_sheet.fillna("")
+        # new_sample_sheet.to_dict(orient='records')
+        fentan_results = []
+        for data in  new_sample_sheet.to_dict(orient='records'):
+            fentan_data = {
+                "总费用":data["小计"],
+                "个数":data["需要分摊的A#个数"],
+                "需要分摊的A":data["抽A#"],
+                "已分摊的费用":0.0
+            }
+
+            if fentan_data["个数"] == 0 or not fentan_data["个数"] or not fentan_data["总费用"]:
+                # logger.info(data["运单号"],"没有需要分摊的")
+                continue
+
+
+            fentan_money = round(fentan_data["总费用"]/fentan_data["个数"],2)
+
+            if "," in fentan_data["需要分摊的A"]:
+                splited_list = split_work_nums(fentan_data["需要分摊的A"])
+            elif not fentan_data["需要分摊的A"]:
+                splited_list = []
+            else:
+                splited_list = [fentan_data["需要分摊的A"]]
+            for loop_item_index, loop_item in enumerate(splited_list):
+                if len(splited_list) == 1:
+                    fentan_money = fentan_data["总费用"]
+                elif loop_item_index + 1 == len(splited_list):
+                    fentan_money = fentan_data["总费用"] - fentan_data["已分摊的费用"]
+                else:
+                    fentan_money = fentan_money
+                    fentan_data["已分摊的费用"] += fentan_money
+
+                fentan_results.append(['应付',loop_item,'SHPZ-上海平政','OCLR-起运港出口报关费',fentan_money,'',1,'RMB',1])
+
+        write_data_to_excel_aspose(data=fentan_results,start_row=2,start_column="A",sheet_name="报关费分摊模板",file_path=new_file_path)
+        return new_file_path
+
+    finally:
+        pass
+
 
 if __name__ == "__main__":
     execute(file_path = r"C:\Users\a1337\Downloads\账单-上海平政-2507.xlsx")

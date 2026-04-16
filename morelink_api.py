@@ -61,14 +61,22 @@ class MoreLinkClient:
 
     def load_session(self):
         if os.path.exists(self.morelink_session_file):
-            with open(self.morelink_session_file, "rb") as f:
-                session_data = pickle.load(f)
-                self.httpx_client = httpx.Client()
-                for name, value in session_data["cookies"].items():
-                    self.httpx_client.cookies.set(name, value)
-                self.httpx_client.headers.update(session_data["headers"])
-                self.session_active = True
-                return self.httpx_client
+            try:
+                with open(self.morelink_session_file, "rb") as f:
+                    session_data = pickle.load(f)
+                    self.httpx_client = httpx.Client()
+                    for name, value in session_data["cookies"].items():
+                        self.httpx_client.cookies.set(name, value)
+                    self.httpx_client.headers.update(session_data["headers"])
+                    self.session_active = True
+                    return self.httpx_client
+            except (EOFError, pickle.UnpicklingError, KeyError, Exception) as e:
+                logger.warning(f"session文件损坏或为空，删除后重新登录: {e}")
+                try:
+                    os.remove(self.morelink_session_file)
+                except Exception:
+                    pass
+                return None
         return None
 
     def login_morelink_get_httpx_client(self, retry_counts: int = 5):

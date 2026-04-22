@@ -29,13 +29,11 @@ sys.path.append(os.path.join(aspose_dir, "net40"))
 clr.AddReference("Aspose.Cells")
 
 # Import Aspose.Cells namespaces
-from Aspose.Cells import Workbook, SaveFormat,License
-# # 创建License对象
-# license = License()
+from Aspose.Cells import Workbook, SaveFormat, License
 
-# # 设置许可证
-# license.SetLicense(license_path)
-# print("Aspose.Cells .NET 许可证设置成功！")
+# 设置许可证
+license = License()
+license.SetLicense(license_path)
 
 def column_letter_to_number(column_letter):
     """将列字母转换为对应的列号（从1开始）。"""

@@ -15,7 +15,8 @@ from fentan import (
     guangzhou_hangjie_aspose_execute,
     shanghai_pingzheng_aspose_execute,
     hangjie_hubs_execute,
-    pingzheng_hubs_execute
+    pingzheng_hubs_execute,
+    xiamen_zhixuan_fentan_execute
 )
 
 TASK_MAPPING = {
@@ -24,6 +25,7 @@ TASK_MAPPING = {
     "上海平政": shanghai_pingzheng_aspose_execute,
     "广州航捷_新系统": hangjie_hubs_execute,
     "上海平政_新系统": pingzheng_hubs_execute,
+    "厦门_致宣":xiamen_zhixuan_fentan_execute
 }
 
 # ========== 配置 ==========

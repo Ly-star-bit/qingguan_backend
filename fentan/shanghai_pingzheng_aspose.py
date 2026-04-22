@@ -29,7 +29,11 @@ sys.path.append(os.path.join(aspose_dir, "net40"))
 clr.AddReference("Aspose.Cells")
 
 # Import Aspose.Cells namespaces
-from Aspose.Cells import Workbook, SaveFormat,License
+from Aspose.Cells import Workbook, SaveFormat, License
+
+# 设置许可证
+license = License()
+license.SetLicense(license_path)
 
 
 

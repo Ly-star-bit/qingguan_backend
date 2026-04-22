@@ -109,6 +109,8 @@ async def get_tasks():
                         {"label": "广州航捷", "value": "广州航捷"},
                         {"label": "广州航捷_新系统", "value": "广州航捷_新系统"},
                         {"label": "上海平政_新系统", "value": "上海平政_新系统"},
+                        {"label": "厦门_致宣", "value": "厦门_致宣"},
+
                     ],
                     "defaultValue": "上海平政",  # 默认选中值
                 }

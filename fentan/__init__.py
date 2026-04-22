@@ -4,3 +4,4 @@ from .guangzhou_hangjie_aspose import execute as guangzhou_hangjie_aspose_execut
 
 from .guangzhou_hangjie_aspose import  hangjie_hubs_execute
 from .shanghai_pingzheng_aspose import pingzheng_hubs_execute
+from .xiamen_zhixuan_aspose import xiamen_zhixuan_fentan_execute

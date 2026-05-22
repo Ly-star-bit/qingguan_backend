@@ -19,9 +19,9 @@ clr.AddReference(dll_path)
 from Aspose.Cells import Workbook, SaveFormat, License
 
 # 设置许可证
-license_path = os.path.join(aspose_dir, "Aspose.Total.NET.lic")
-license = License()
-license.SetLicense(license_path)
+# license_path = os.path.join(aspose_dir, "Aspose.Total.NET.lic")
+# license = License()
+# license.SetLicense(license_path)
 
 
 def column_letter_to_number(column_letter):
@@ -215,14 +215,14 @@ def xiamen_zhixuan_fentan_execute(file_path: str):
 
             all_money += money
 
-            if not kehu:
-                kehu = "厦门致萱供应链"
+            # if not kehu:
+            kehu = "厦门致萱供应链"
 
             fentan_row = [
                 "应付",           # 费用类型
                 ahao,             # SO号/工作单号/参考号
                 kehu,             # 客户/供应商名称
-                "报关费",         # 费用名称
+                "提货费",         # 费用名称
                 "",               # 单位（留空）
                 money,            # 单价
                 1,                # 数量
@@ -253,5 +253,5 @@ def xiamen_zhixuan_fentan_execute(file_path: str):
 
 
 if __name__ == "__main__":
-    file_path = r"C:\Users\a1337\Downloads\账单-厦门致萱-2603.xls"
+    file_path = r"C:\Users\a1337\Downloads\账单-厦门致萱-2604.xls"
     xiamen_zhixuan_fentan_execute(file_path)

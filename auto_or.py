@@ -1,3 +1,4 @@
+import hashlib
 import json
 import random
 import math
@@ -139,7 +140,7 @@ def process_unit_price(value):
         final_num = Decimal(base_cents) / 100
                 # 如果转换后为0，保持原始值
         if final_num == 0:
-            return f"{num:.2f}"
+            return num
         # 修改点：直接返回 Decimal 数字对象，不再格式化为字符串
         return final_num
         
@@ -210,9 +211,9 @@ def optimize_packing_selection(
         results = []
         for attempt in range(max_attempts):
             # 每次尝试随机生成固定的最小/最大箱数占比
-            curr_min_ratio = random.uniform(min_ratio, max_ratio)  # 如 0.12
-            curr_max_ratio = random.uniform(max_box_ratio_range[0], max_box_ratio_range[1])  # 如 0.62
-            print(f"  尝试 {attempt+1}: curr_min_ratio={curr_min_ratio:.3f}, curr_max_ratio={curr_max_ratio:.3f}, 最小箱数范围=[{curr_min_ratio:.3f}, {curr_min_ratio+0.03:.3f}], 最大箱数范围=[{curr_max_ratio-0.03:.3f}, {curr_max_ratio:.3f}]")
+            # curr_min_ratio = random.uniform(min_ratio, max_ratio)  # 如 0.12
+            # curr_max_ratio = random.uniform(max_box_ratio_range[0], max_box_ratio_range[1])  # 如 0.62
+            # print(f"  尝试 {attempt+1}: curr_min_ratio={curr_min_ratio:.3f}, curr_max_ratio={curr_max_ratio:.3f}, 最小箱数范围=[{curr_min_ratio:.3f}, {curr_min_ratio+0.03:.3f}], 最大箱数范围=[{curr_max_ratio-0.03:.3f}, {curr_max_ratio:.3f}]")
 
             # 建立优化模型
             model = lp.LpProblem(
@@ -226,16 +227,14 @@ def optimize_packing_selection(
             z = lp.LpVariable.dicts("select", range(n), cat="Binary")
             w = lp.LpVariable.dicts("weight", range(n), lowBound=0, cat="Continuous")
 
-            # 排序约束变量：产品i是否被选中且箱数在所有选中产品中最小/最大
-            is_min = lp.LpVariable.dicts("is_min", range(n), cat="Binary")
-            is_max = lp.LpVariable.dicts("is_max", range(n), cat="Binary")
+
 
             # 数据准备
             names = [p["name"] for p in products_data]
             unit_prices = [
                 process_unit_price(Decimal(str(p["price"])) * Decimal(str(expansion_factor or 1.0))) for p in products_data
             ]
-            pcs_per_box = [p["pcs_per_box"] for p in products_data]
+            pcs_per_box = [int(p["pcs_per_box"]) for p in products_data]
             tax_rates = [p["tax_rate"] for p in products_data]
 
             # 重量范围处理
@@ -252,13 +251,12 @@ def optimize_packing_selection(
                 # target_boxes：如果有且不为空，则箱数固定
                 target_boxes_list.append(p.get("target_boxes"))
 
-            # 随机化重量以避开局部最优
+            # 确定性微偏：当多个产品单箱重量相同时，用名称 md5 做微小偏移来打破对称
             dups = {val for val, count in Counter(min_weights).items() if count > 1}
             min_weights = [
-                mw + random.uniform(0.1, 2.0) if mw in dups else mw
-                for mw in min_weights
+                mw + (int(hashlib.md5(products_data[i]["name"].encode()).hexdigest(), 16) % 100) * 0.005 + 0.01 if mw in dups else mw
+                for i, mw in enumerate(min_weights)
             ]
-
             val_per_box = [unit_prices[i] * pcs_per_box[i] for i in range(n)]
             tax_per_box = [
                 float(val_per_box[i]) * float(Decimal(str(tax_rates[i]))) * float(Decimal(str(exchange_rate))) for i in range(n)
@@ -266,7 +264,9 @@ def optimize_packing_selection(
             val_per_box = [float(v) for v in val_per_box]
 
             # 目标函数与约束
-            model += lp.lpSum([tax_per_box[i] * b[i] for i in range(n)])
+            # model += lp.lpSum([tax_per_box[i] * b[i] for i in range(n)])
+            model += lp.lpSum([tax_per_box[i] * (1 + tax_per_box[i] * 0.00001) * b[i] for i in range(n)])
+            # model += lp.lpSum([(tax_per_box[i] + i * 0.0001) * b[i] for i in range(n)])
             model += lp.lpSum([b[i] for i in range(n)]) == B_target
             model += lp.lpSum([w[i] for i in range(n)]) == W_target
             model += (
@@ -290,16 +290,34 @@ def optimize_packing_selection(
                 model += w[i] >= min_weights[i] * b[i]
                 model += w[i] <= max_weights[i] * b[i]
 
-            # ========== 暂时移除排序约束，只保留基本的 alpha/beta 约束 ==========
-            # 排序约束已移除，让优化器自由选择
-            # 如果后续需要识别最小/最大产品，可以在阶段2后处理中完成
+            # ========== 阶段1 比例约束（仅当没有固定箱数产品时生效） ==========
+            # 全局找出单箱税金最高和最低的产品，在求解阶段就锁定它们的占比区间
+            # 税金最高 → 占比 10%-15%，税金最低 → 占比 60%-65%
+            # 好处：同样输入永远得到同样的产品角色分配，不受重量随机扰动影响
+            has_any_fixed = any(tb is not None and tb > 0 for tb in target_boxes_list)
+            if not has_any_fixed and n >= 2:
+                sorted_by_tax = sorted(range(n), key=lambda i: tax_per_box[i])
+                lowest_tax_idx = sorted_by_tax[0]
+                highest_tax_idx = sorted_by_tax[-1]
+                # min_box_ratio_range → 税金最高产品占比（10%-15%）
+                min_low, min_high = min_box_ratio_range
+                # max_box_ratio_range → 税金最低产品占比（60%-65%）
+                max_low, max_high = max_box_ratio_range
+                model += b[highest_tax_idx] <= int(B_target * min_high) * z[highest_tax_idx]
+                model += b[highest_tax_idx] >= int(B_target * min_low) * z[highest_tax_idx]
+                model += b[lowest_tax_idx] >= int(B_target * max_low) * z[lowest_tax_idx]
+                model += b[lowest_tax_idx] <= int(B_target * max_high) * z[lowest_tax_idx]
+                # 强制选中全局税金最高和最低的产品，避免求解器绕过比例约束
+                model += z[highest_tax_idx] == 1
+                model += z[lowest_tax_idx] == 1
 
-            # 求解
-            model.solve(lp.PULP_CBC_CMD(timeLimit=30, msg=0))
+            # 求解（threads=1 确保单线程确定性输出）
+            model.solve(lp.PULP_CBC_CMD(timeLimit=60, msg=0, threads=1))
 
             if lp.LpStatus[model.status] == "Optimal":
                 print(f"    ✅ 尝试 {attempt+1} 成功找到一个可行解！")
                 selected = []
+                # 输入已全部确定性，仅需一次成功求解，避免多次求解的微小数值差异导致结果不一致
                 tw, tv, tt = 0, 0, 0
                 for i in range(n):
                     if b[i].varValue > 0:
@@ -312,7 +330,7 @@ def optimize_packing_selection(
                                 "name": names[i],
                                 "boxes": bc,
                                 "weight_per_box": wv / bc,
-                                "total_weight": round(wv),
+                                "total_weight": round(wv, 1),
                                 "value_usd": vv,
                                 "tax_cny": tc,
                                 "pieces_per_box": pcs_per_box[i],
@@ -331,7 +349,7 @@ def optimize_packing_selection(
                     {
                         "selected_products": selected,
                         "summary": {
-                            "total_weight": round(tw),
+                            "total_weight": round(tw, 1),
                             "total_value_usd": tv,
                             "total_tax_cny": tt,
                             "value_per_weight_usd": tv / tw if tw > 0 else 0,
@@ -344,6 +362,7 @@ def optimize_packing_selection(
                         },
                     }
                 )
+                break
 
         if results:
             # 选择最优结果
@@ -354,95 +373,120 @@ def optimize_packing_selection(
                     -x["summary"]["tax_per_weight_cny"],
                 ),
             )
+            # 打印阶段1最优结果
+            bs = best["summary"]
+            print(f"\n{'─' * 100}")
+            print(f"【阶段1最优结果】 {bs['status_message']}")
+            print(f"{'─' * 100}")
+            print(f"{'品名':<25} | {'箱数':>5} | {'总重(kg)':>10} | {'货值(USD)':>12} | {'单项税金':>10} | {'税金(CNY)':>10}")
+            for p in best["selected_products"]:
+                print(f"{p['name']:<25} | {p['boxes']:>5} | {p['total_weight']:>10} | {p['value_usd']:>12.1f} | {p['_tax_per_box']:>10.2f} | {p['tax_cny']:>10.1f}")
+            print(f"{'─' * 100}")
+            print(f"总计: {bs['total_weight']:>10}kg | {bs['total_value_usd']:>12.1f}USD | {'':>10} | {bs['total_tax_cny']:>10.1f}CNY | 产品数: {bs['selected_count']}")
+            print(f"货值/重量={bs['value_per_weight_usd']:.2f} | 税金/重量={bs['tax_per_weight_cny']:.2f}")
+            print(f"{'─' * 100}")
             s = best["summary"]
             s["MPF"] = max(33.58, min(634.62, s["total_value_usd"] * 0.003464))
 
             # ========== 阶段2：后处理百分比约束 ==========
-            # 按箱数排序，找出最小和最大的产品
-            sorted_by_boxes = sorted(best["selected_products"], key=lambda x: x["boxes"])
-            total_boxes = B_target
+            # 如果有产品设置了 target_boxes（固定箱数），则跳过阶段2
+            # 因为固定箱数产品可能已经是最大/最小，百分比约束不适用
+            has_fixed = any(target_boxes_list[p["_original_index"]] is not None
+                           and target_boxes_list[p["_original_index"]] > 0
+                           for p in best["selected_products"])
 
-            if len(sorted_by_boxes) >= 2:
-                # 最小箱数产品
-                min_product = sorted_by_boxes[0]
+            if has_fixed:
+                print(f"\n阶段2 - 跳过（存在固定箱数产品，不适用百分比约束）")
+            elif len(best["selected_products"]) >= 2:
+                # 按单箱税金排序：税金最高的产品占比应最少(10-15%)，税金最低的占比应最多(60-65%)
+                sorted_by_tax = sorted(best["selected_products"], key=lambda x: x["_tax_per_box"])
+                total_boxes = B_target
+
+                # 税金最高 → 占比应该最少
+                min_product = sorted_by_tax[-1]
                 min_ratio = min_product["boxes"] / total_boxes
-                # 最大箱数产品
-                max_product = sorted_by_boxes[-1]
+                # 税金最低 → 占比应该最多
+                max_product = sorted_by_tax[0]
                 max_ratio = max_product["boxes"] / total_boxes
 
-                print(f"\n阶段2 - 箱数分布检查:")
-                print(f"  最小箱数产品: {min_product['name']} - {min_product['boxes']}箱 (占比{min_ratio:.1%})")
-                print(f"  最大箱数产品: {max_product['name']} - {max_product['boxes']}箱 (占比{max_ratio:.1%})")
+                print(f"\n阶段2 - 箱数分布检查（按单箱税金）:")
+                print(f"  税金最高产品(占比应10-15%): {min_product['name']} - {min_product['boxes']}箱 (占比{min_ratio:.1%}), 单箱税金={min_product['_tax_per_box']:.2f}")
+                print(f"  税金最低产品(占比应60-65%): {max_product['name']} - {max_product['boxes']}箱 (占比{max_ratio:.1%}), 单箱税金={max_product['_tax_per_box']:.2f}")
 
                 # 检查是否满足百分比约束
                 min_ok = min_box_ratio_range[0] <= min_ratio <= min_box_ratio_range[1]
                 max_ok = max_box_ratio_range[0] <= max_ratio <= max_box_ratio_range[1]
 
-                print(f"  最小箱数约束 [{min_box_ratio_range[0]:.1%}, {min_box_ratio_range[1]:.1%}]: {'✅' if min_ok else '❌'} ({min_ratio:.1%})")
-                print(f"  最大箱数约束 [{max_box_ratio_range[0]:.1%}, {max_box_ratio_range[1]:.1%}]: {'✅' if max_ok else '❌'} ({max_ratio:.1%})")
+                print(f"  税金最高占比约束 [{min_box_ratio_range[0]:.1%}, {min_box_ratio_range[1]:.1%}]: {'✅' if min_ok else '❌'} ({min_ratio:.1%})")
+                print(f"  税金最低占比约束 [{max_box_ratio_range[0]:.1%}, {max_box_ratio_range[1]:.1%}]: {'✅' if max_ok else '❌'} ({max_ratio:.1%})")
 
                 # 如果不满足，尝试调整
-                if not min_ok or not max_ok:
-                    # 在范围内随机选择目标比例
+                if True:  # 无固定箱数时始终执行阶段2随机比例调整
+                    # Phase 2 仅调比例不选产品，random 安全
                     target_min_ratio = random.uniform(min_box_ratio_range[0], min_box_ratio_range[1])
                     target_max_ratio = random.uniform(max_box_ratio_range[0], max_box_ratio_range[1])
                     target_min_boxes = int(B_target * target_min_ratio)
                     target_max_boxes = int(B_target * target_max_ratio)
 
                     print(f"\n  正在调整箱数...")
-                    print(f"  随机目标: 最小={target_min_boxes}箱 ({target_min_ratio:.1%}), 最大={target_max_boxes}箱 ({target_max_ratio:.1%})")
+                    print(f"  随机目标: 税金最高={target_min_boxes}箱 ({target_min_ratio:.1%}), 税金最低={target_max_boxes}箱 ({target_max_ratio:.1%})")
 
                     # 计算调整前的总箱数
                     old_total_boxes = sum(p["boxes"] for p in best["selected_products"])
 
-                    # 调整最小箱数产品
-                    if not min_ok and min_ratio < min_box_ratio_range[0]:
-                        min_product["boxes"] = target_min_boxes
-                    elif not min_ok and min_ratio > min_box_ratio_range[1]:
-                        min_product["boxes"] = max(target_min_boxes, 1)
+                    # 调整两端的箱数到目标比例（每次都用随机值，让比例有自然浮动）
+                    min_product["boxes"] = target_min_boxes
+                    max_product["boxes"] = target_max_boxes
 
-                    # 调整最大箱数产品
-                    if not max_ok and max_ratio < max_box_ratio_range[0]:
-                        max_product["boxes"] = target_max_boxes
-                    elif not max_ok and max_ratio > max_box_ratio_range[1]:
-                        max_product["boxes"] = min(target_max_boxes, B_target - k + 1)
-
-                    # 计算调整后的总箱数
-                    new_total_boxes = sum(p["boxes"] for p in best["selected_products"])
-                    box_diff = new_total_boxes - old_total_boxes
-
-                    # 如果总箱数不等于 B_target，需要调整其他产品
-                    if box_diff != 0:
-                        # 找出非最小/非最大的产品
-                        other_products = [p for p in best["selected_products"] if p != min_product and p != max_product]
-                        if other_products and box_diff < 0:
-                            # 需要减少箱数，从其他产品均匀减少
-                            reduce_per_product = abs(box_diff) // len(other_products)
-                            for p in other_products:
+                    # 剩余箱数按单箱税金反比分配（税金越低拿越多）
+                    other_products = [p for p in best["selected_products"] if p != min_product and p != max_product]
+                    if other_products:
+                        remaining_boxes = B_target - min_product["boxes"] - max_product["boxes"]
+                        if remaining_boxes > 0:
+                            # 反比权重：税金越低权重越大
+                            weights = [1.0 / max(p["_tax_per_box"], 0.01) for p in other_products]
+                            total_weight = sum(weights)
+                            assigned = 0
+                            for idx, p in enumerate(other_products):
+                                if idx == len(other_products) - 1:
+                                    # 最后一个拿剩余，避免尾差
+                                    p["boxes"] = remaining_boxes - assigned
+                                else:
+                                    p["boxes"] = int(remaining_boxes * weights[idx] / total_weight)
+                                    assigned += p["boxes"]
+                                # 确保不低于 min_boxes
                                 orig_idx = p["_original_index"]
                                 min_limit = min_boxes_list[orig_idx]
-                                p["boxes"] = max(p["boxes"] - reduce_per_product, min_limit)
-                        elif other_products and box_diff > 0:
-                            # 需要增加箱数，向其他产品均匀增加
-                            add_per_product = box_diff // len(other_products)
+                                if p["boxes"] < min_limit:
+                                    p["boxes"] = min_limit
+                        else:
+                            # 剩余为负或0，按比例缩到 min_limit 以上
                             for p in other_products:
-                                p["boxes"] = min(p["boxes"] + add_per_product, B_target)
+                                orig_idx = p["_original_index"]
+                                p["boxes"] = max(min_boxes_list[orig_idx], 1)
 
-                        # 重新计算确保总箱数 = B_target
-                        current_total = sum(p["boxes"] for p in best["selected_products"])
-                        if current_total != B_target and other_products:
-                            # 调整第一个其他产品来弥补差值
-                            if current_total < B_target:
-                                other_products[0]["boxes"] += (B_target - current_total)
-                            elif current_total > B_target:
-                                orig_idx = other_products[0]["_original_index"]
-                                min_limit = min_boxes_list[orig_idx]
-                                other_products[0]["boxes"] = max(other_products[0]["boxes"] - (current_total - B_target), min_limit)
+                    # 确保总箱数精确等于 B_target（修正 min_limit 截断等导致的偏差）
+                    _diff = sum(p["boxes"] for p in best["selected_products"]) - B_target
+                    if _diff != 0:
+                        print(f"  修正箱数偏差: 当前{sum(p['boxes'] for p in best['selected_products'])}箱, 目标{B_target}箱, 偏差{_diff:+d}")
+                        # 按箱数从大到小排序，优先从箱数大的产品借/还
+                        for _p in sorted(best["selected_products"], key=lambda x: x["boxes"], reverse=True):
+                            if _diff == 0:
+                                break
+                            _ml = min_boxes_list[_p["_original_index"]]
+                            if _diff > 0:
+                                # 需要减少，但不能低于 min_boxes
+                                _adj = min(_diff, _p["boxes"] - _ml)
+                                _p["boxes"] -= _adj
+                                _diff -= _adj
+                            else:
+                                # 需要增加（_diff 为负，减负 = 加）
+                                _p["boxes"] -= _diff
+                                _diff = 0
 
                     # 重新计算每个产品的重量、货值、税金
                     for p in best["selected_products"]:
                         p["pieces"] = p["boxes"] * p["pieces_per_box"]
-                        # 重新计算货值和税金（基于调整后的箱数）
                         p["value_usd"] = p["_val_per_box"] * p["boxes"]
                         p["tax_cny"] = p["_tax_per_box"] * p["boxes"]
 
@@ -454,25 +498,20 @@ def optimize_packing_selection(
                     # 如果总重量偏差超过5%，尝试微调weight_per_box来修正
                     weight_diff = tw - W_target
                     if abs(weight_diff) > W_target * 0.05 and k >= 2:
-                        # 通过调整中间产品的weight_per_box来修正总重量
-                        # 找到中间产品（非最小非最大）
                         mid_products = [p for p in best["selected_products"] if p != min_product and p != max_product]
                         if mid_products:
-                            # 计算每个产品的调整量
                             adjust_per_box = weight_diff / mid_products[0]["boxes"]
                             for p in mid_products:
                                 new_wpb = p["weight_per_box"] - adjust_per_box
-                                # 确保在允许范围内
                                 orig_idx = p["_original_index"]
                                 if min_weights[orig_idx] <= new_wpb <= max_weights[orig_idx]:
                                     p["weight_per_box"] = new_wpb
                                     break
-                            # 重新计算重量
                             for p in best["selected_products"]:
-                                p["total_weight"] = round(p["weight_per_box"] * p["boxes"])
+                                p["total_weight"] = round(p["weight_per_box"] * p["boxes"], 1)
                             tw = sum(p["total_weight"] for p in best["selected_products"])
 
-                    s["total_weight"] = round(tw)
+                    s["total_weight"] = round(tw, 1)
                     s["total_value_usd"] = tv
                     s["total_tax_cny"] = tt
                     s["tax_per_weight_cny"] = tt / tw if tw > 0 else 0
@@ -481,12 +520,22 @@ def optimize_packing_selection(
                     s["MPF"] = max(33.58, min(634.62, tv * 0.003464))
 
                     # 验证最终占比
-                    final_sorted = sorted(best["selected_products"], key=lambda x: x["boxes"])
-                    final_min_ratio = final_sorted[0]["boxes"] / B_target
-                    final_max_ratio = final_sorted[-1]["boxes"] / B_target
+                    final_sorted_by_tax = sorted(best["selected_products"], key=lambda x: x["_tax_per_box"])
+                    final_min_product = final_sorted_by_tax[-1]
+                    final_max_product = final_sorted_by_tax[0]
+                    final_min_ratio = final_min_product["boxes"] / B_target
+                    final_max_ratio = final_max_product["boxes"] / B_target
 
-                    print(f"  调整后: 最小={final_sorted[0]['boxes']}箱 ({final_min_ratio:.1%}), 最大={final_sorted[-1]['boxes']}箱 ({final_max_ratio:.1%})")
+                    print(f"  调整后: 税金最高={final_min_product['name']} {final_min_product['boxes']}箱 ({final_min_ratio:.1%}), 税金最低={final_max_product['name']} {final_max_product['boxes']}箱 ({final_max_ratio:.1%})")
                     print(f"  调整后汇总: 总重={tw}kg (目标{W_target}kg, 偏差{tw-W_target:+.0f}kg), 货值={tv}USD, 税金={tt}CNY")
+
+            # 标记产品占比角色
+            sorted_by_tax_final = sorted(best["selected_products"], key=lambda x: x["_tax_per_box"])
+            for p in best["selected_products"]:
+                p["ratio_tag"] = None
+            if not has_fixed and len(best["selected_products"]) >= 2:
+                sorted_by_tax_final[-1]["ratio_tag"] = f"{sorted_by_tax_final[-1]['boxes'] / B_target:.1%}"
+                sorted_by_tax_final[0]["ratio_tag"] = f"{sorted_by_tax_final[0]['boxes'] / B_target:.1%}"
 
             # 打印优化报表
             print("\n" + "=" * 85)

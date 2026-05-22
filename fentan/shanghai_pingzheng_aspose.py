@@ -432,7 +432,7 @@ def pingzheng_hubs_execute(file_path, start_date=None, end_date=None):
                 bill_no = origin_billno.split("_")[0][:3] + "-"  + origin_billno.split("_")[0][3:]
                 fix_data["billno"] = bill_no
                 #分单号，大货单号 - 使用正则提取 A/S 开头 + 年份(26/27/28) + 月份(01-12) 的模式
-                work_num_list = re.findall(r'[AS]\d{6}', origin_billno)
+                work_num_list = re.findall(r'[AS]\d{9}', origin_billno)
                 work_num_str = ",".join(work_num_list)
                 fix_data["dahuo_no"] = work_num_str
 
@@ -530,7 +530,7 @@ def pingzheng_hubs_execute(file_path, start_date=None, end_date=None):
                     fentan_money = fentan_money
                     fentan_data["已分摊的费用"] += fentan_money
 
-                fentan_results.append(['应付',loop_item,'SHPZ-上海平政','OCLR-起运港出口报关费',fentan_money,'',1,'RMB',1])
+                fentan_results.append(['应付',loop_item,'SHPZ-上海平政','报关费',fentan_money,'',1,'CNY',1])
 
         write_data_to_excel_aspose(data=fentan_results,start_row=2,start_column="A",sheet_name="报关费分摊模板",file_path=new_file_path)
         return new_file_path
@@ -540,4 +540,4 @@ def pingzheng_hubs_execute(file_path, start_date=None, end_date=None):
 
 
 if __name__ == "__main__":
-    execute(file_path = r"C:\Users\a1337\Downloads\账单-上海平政-2507.xlsx")
+    pingzheng_hubs_execute(file_path = r"C:\Users\a1337\Downloads\账单-上海平政-2603.xlsx")

@@ -64,6 +64,7 @@ EXCLUDED_PATHS = {
     "/openapi.json*",
     "/redoc/",
     "/qingguan/ip_white_list/",
+    "/qingguan/update-md/latest/",
     "/excel-preview/",
     "/luckysheet-preview/",
     "/upload-excel-luckysheet/",

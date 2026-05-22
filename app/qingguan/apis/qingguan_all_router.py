@@ -1,24 +1,63 @@
+import os
+import random
+import traceback
+from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from io import BytesIO
+from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import quote
 
+# # 将项目根目录添加到 Python 路径，以便导入 excel_ai 模块
+# project_root = Path(__file__).resolve().parent.parent.parent.parent
+# if str(project_root) not in sys.path:
+#     sys.path.insert(0, str(project_root))
+import pandas as pd
 from fastapi import (
     APIRouter,
+    Depends,
     HTTPException,
+    Request,
+    UploadFile,
 )
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from loguru import logger
 from pydantic import BaseModel
+from pymongo import MongoClient
 
+from app.dadan.models import (
+    ShipmentLog,
+)
+from app.db_mongo import get_session
+from app.schemas import (
+    ProductData,
+    ShippingRequest,
+)
+from app.utils import (
+    MinioClient,
+    generate_admin_shenhe_canada_template,
+)
+from app.utils_aspose import (
+    generate_admin_shenhe_template,
+    generate_excel_from_template_canada,
+    generate_excel_from_template_test,
+)
 from auto_or import (
     fetch_products_from_api,
     get_qingguan_access_token,
     optimize_packing_selection,
 )
+from excel_ai.autogen_extractor import AutoGenExcelExtractor
 
 from .air_product import air_product_router
 from .consignee import consignee_router
 from .custom_clear_history_origin_summary import (
     custom_clear_history_origin_summary_router,
 )
-from .custom_clear_history_summary import customer_clear_history_summary_router,create_summary
+from .custom_clear_history_summary import (
+    create_summary,
+    customer_clear_history_summary_router,
+)
 from .factory import factory_router
 from .fedex_ups import express_delivery_router
 from .fencangdan import fencangdan_router
@@ -28,62 +67,16 @@ from .ip_white_list import ip_white_list_router
 from .packing_types import packing_type_router
 from .ports import ports_router
 from .sea_product import sea_product_router
+from .sea_tidan_log import create_shipment_log, sea_tidan_log_router
 from .shipper_receiver import shipperandreceiver_router
-from .sea_tidan_log import sea_tidan_log_router,create_shipment_log
 from .tariff import tariff_router
-import os
-from pathlib import Path
-import random
-import traceback
-from datetime import datetime
-from pymongo import MongoClient
 
-from fastapi import (
-    Depends,
-    Request,
-    UploadFile
-)
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from loguru import logger
-
-from app.dadan.models import (
-    ShipmentLog,
-)
-from app.schemas import (
-    ProductData,
-    ShippingRequest,
-)
-from app.utils import (
-    MinioClient,
-    generate_admin_shenhe_canada_template,
-)
-
-from app.utils_aspose import (
-    generate_excel_from_new_template_test,
-    generate_excel_from_template_canada,
-    generate_excel_from_template_test,
-    generate_admin_shenhe_template
-)
-from app.db_mongo import get_session
-from urllib.parse import quote
-from decimal import Decimal, ROUND_HALF_UP
-import sys
-from pathlib import Path
-
-# # 将项目根目录添加到 Python 路径，以便导入 excel_ai 模块
-# project_root = Path(__file__).resolve().parent.parent.parent.parent
-# if str(project_root) not in sys.path:
-#     sys.path.insert(0, str(project_root))
-
-import pandas as pd
-from excel_ai.autogen_extractor import AutoGenExcelExtractor
-from excel_ai.models import ProductRecord
 
 def process_unit_price(value):
     # 1. 处理空值或非数字情况
     if value is None or value == "":
         return ""
-    
+
     try:
         # 转换为 Decimal 以保证精度
         # 如果输入是字符串，直接转；如果是 float，先转字符串再转 Decimal 避免浮点误差
@@ -91,19 +84,19 @@ def process_unit_price(value):
             num = Decimal(str(value))
         else:
             num = Decimal(str(value))
-            
+
         # 第一步：标准四舍五入保留两位小数
         # quantize(Decimal('0.01')) 配合 ROUND_HALF_UP 实现标准的四舍五入
-        rounded_num = num.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        
+        rounded_num = num.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
         # 将结果拆分为整数部分和小数部分以便处理第二位小数
         # 例如 0.96 -> sign=1, digits=(9, 6), exponent=-2
         sign, digits, exponent = rounded_num.as_tuple()
-        
+
         # 确保至少有两位小数（防止出现类似 5.0 的情况，虽然 quantize 后通常是两位，但防御性编程）
         # digits 是一个元组，比如 (0, 9, 6) 代表 0.96 (取决于 exponent)
         # 更简单的做法是直接操作字符串或利用数学取余，但为了严谨我们提取最后一位小数
-        
+
         # 获取当前两位小数的数值 (0 到 99)
         # 方法：将数字乘以 100 取整
         cents = int(rounded_num * 100)
@@ -132,11 +125,13 @@ def process_unit_price(value):
 
         # 格式化为字符串，确保始终显示两位小数 (例如 0.20 而不是 0.2)
         return f"{final_num:.2f}"
-        
+
     except Exception:
         # 如果转换失败（例如原本就是非数字字符串），返回原值或空字符串
         return ""
-qingguan_router = APIRouter(tags=["清关"], prefix='/qingguan')
+
+
+qingguan_router = APIRouter(tags=["清关"], prefix="/qingguan")
 
 # 包含所有子路由
 qingguan_router.include_router(air_product_router)
@@ -158,7 +153,6 @@ qingguan_router.include_router(sea_tidan_log_router)
 qingguan_router.include_router(tariff_router)
 
 
-
 # 定义处理数据的函数
 def process_shipping_data(
     shipper_name: str,
@@ -171,16 +165,19 @@ def process_shipping_data(
     predict_tax_price: float,
     execute_type: str,
     export_country: str,
-    port_name:str="",
-    operate_type:str = "",
+    port_name: str = "",
+    operate_type: str = "",
     session: MongoClient = Depends(get_session),
 ):
     db = session
-    exchange_rate = db.exchange_rates.find_one({"version": "latest","type":"美金人民币汇率"})
+    exchange_rate = db.exchange_rates.find_one({
+        "version": "latest",
+        "type": "美金人民币汇率",
+    })
     port_detail = None
-    if operate_type=='auto' and port_name:
-    # if port_name:
-        port_detail = db.ports.find_one({"port_name":port_name})
+    if operate_type == "auto" and port_name:
+        # if port_name:
+        port_detail = db.ports.find_one({"port_name": port_name})
         logger.info(f"port_detail:{port_detail}")
     num_products = sum([i.box_num for i in product_list])
     if num_products == 0:
@@ -200,9 +197,9 @@ def process_shipping_data(
     receiver_record = db.consignees.find_one({"发货人": receiver_name.upper()})
 
     # 查询发货人地址
-    shipper_record = db.consignees.find_one(
-        {"发货人": {"$regex": f"^{shipper_name}$", "$options": "i"}}
-    )
+    shipper_record = db.consignees.find_one({
+        "发货人": {"$regex": f"^{shipper_name}$", "$options": "i"}
+    })
     # 查询收件人地址
 
     if not shipper_record:
@@ -215,7 +212,7 @@ def process_shipping_data(
     detail_data_log_list = []
 
     def safe_round(value, product_naem, default=0.0):
-        if not  value:
+        if not value:
             return default
         if value == "/":
             raise ValueError(f"Product '{product_naem}' value is empty or '/'")
@@ -225,7 +222,7 @@ def process_shipping_data(
             return default
 
     def safe_float(value, product_naem, default=0.0):
-        if not  value:
+        if not value:
             return default
         if value == "/":
             raise ValueError(f"Product '{product_naem}' value is empty or '/'")
@@ -239,14 +236,26 @@ def process_shipping_data(
         box_num = product.box_num
         if execute_type == "Air":
             if export_country == "Vietnam":
-                product_record = db.products.find_one({"中文品名": product_name,"startland":"Vietnam"})
+                product_record = db.products.find_one({
+                    "中文品名": product_name,
+                    "startland": "Vietnam",
+                })
             else:
-                product_record = db.products.find_one({"中文品名": product_name,"startland":"China"})
+                product_record = db.products.find_one({
+                    "中文品名": product_name,
+                    "startland": "China",
+                })
         else:
             if export_country == "Vietnam":
-                product_record = db.products_sea.find_one({"中文品名": product_name,"startland":"Vietnam"})
+                product_record = db.products_sea.find_one({
+                    "中文品名": product_name,
+                    "startland": "Vietnam",
+                })
             else:
-                product_record = db.products_sea.find_one({"中文品名": product_name,"startland":"China"})
+                product_record = db.products_sea.find_one({
+                    "中文品名": product_name,
+                    "startland": "China",
+                })
         if not product_record:
             raise ValueError(f"Product '{product_name}' not found in database")
 
@@ -273,12 +282,18 @@ def process_shipping_data(
         if product.single_price:
             # sea海运
             # single_price = process_unit_price (product.single_price)
-            if port_detail and port_detail.get('expansion_factor')  and float(port_detail.get('expansion_factor')) != 1:
-                single_price = float(product.single_price)*float(port_detail['expansion_factor'])
-                single_price = process_unit_price (single_price)
+            if (
+                port_detail
+                and port_detail.get("expansion_factor")
+                and float(port_detail.get("expansion_factor")) != 1
+            ):
+                single_price = float(product.single_price) * float(
+                    port_detail["expansion_factor"]
+                )
+                single_price = process_unit_price(single_price)
             else:
-                single_price = process_unit_price (product.single_price)
-            
+                single_price = process_unit_price(product.single_price)
+
             detail_data_log = {
                 "hs_code": product_record.get("HS_CODE"),
                 "chinese_name": product_record.get("中文品名"),
@@ -294,12 +309,18 @@ def process_shipping_data(
         else:
             # air空运
             # single_price = process_unit_price(product_record.get("单价"))
-            if port_detail and port_detail.get('expansion_factor')  and float(port_detail.get('expansion_factor')) != 1:
-                single_price = float(single_price)*float(port_detail['expansion_factor'])
-                single_price = process_unit_price (single_price)
+            if (
+                port_detail
+                and port_detail.get("expansion_factor")
+                and float(port_detail.get("expansion_factor")) != 1
+            ):
+                single_price = float(single_price) * float(
+                    port_detail["expansion_factor"]
+                )
+                single_price = process_unit_price(single_price)
             else:
-                single_price = process_unit_price (product_record.get("单价"))            
-            
+                single_price = process_unit_price(product_record.get("单价"))
+
             detail_data_log = {
                 "hs_code": product_record.get("HS_CODE"),
                 "chinese_name": product_record.get("中文品名"),
@@ -310,10 +331,8 @@ def process_shipping_data(
                 "category": product_record.get("类别"),
                 "box_nums": box_num,
                 "single_price": product_record.get("单价"),
-                "packing":product_record.get("件箱"),
-
+                "packing": product_record.get("件箱"),
             }
-
 
         if product.packing:
             packing = product.packing
@@ -328,7 +347,9 @@ def process_shipping_data(
         )
 
         if not address_name_list:
-            logger.warning(f"{product_record.get('中文品名')}-{product_type}-工厂地址数据库中没有对应的属性")
+            logger.warning(
+                f"{product_record.get('中文品名')}-{product_type}-工厂地址数据库中没有对应的属性"
+            )
             return {
                 "product_attribute": f"{product_record.get('中文品名')}-{product_type}-工厂地址数据库中没有对应的属性"
             }, None
@@ -337,10 +358,8 @@ def process_shipping_data(
         address = random_address_name.get("地址")
         address_name = random_address_name.get("英文")
 
-        if idx == len(product_list) - 1:  # 处理最后一个产品
-            gross_weight_for_this_product = round(
-                gross_weight - accumulated_gross_weight, 2
-            )
+        if idx == len(product_list) - 1:  # 处理最后一个产品，不round确保总和精确
+            gross_weight_for_this_product = gross_weight - accumulated_gross_weight
             volume_for_this_product = round(volume - accumulated_volume, 2)
         else:
             if product_record.get("single_weight"):
@@ -351,12 +370,14 @@ def process_shipping_data(
                 num_products -= box_num
                 avg_gross_weight = gross_weight / num_products
             else:
-                gross_weight_for_this_product = round(avg_gross_weight * box_num, 2)
+                gross_weight_for_this_product = round(avg_gross_weight * box_num, 1)
                 accumulated_gross_weight += gross_weight_for_this_product
             volume_for_this_product = round(avg_volume * box_num, 2)
             accumulated_volume += volume_for_this_product
 
-        net_weight_for_this_product = round(gross_weight_for_this_product * random.uniform(0.68, 0.72), 2)
+        net_weight_for_this_product = round(
+            gross_weight_for_this_product * random.uniform(0.68, 0.72), 1
+        )
 
         product_data = {
             "MasterBillNo": master_bill_no,
@@ -377,10 +398,9 @@ def process_shipping_data(
             "ChineseName": product_record.get("中文品名"),
             "GrossWeight": gross_weight_for_this_product,
             "net_weight": net_weight_for_this_product,
-            "single_weight": product_record.get("single_weight",""),
+            "single_weight": product_record.get("single_weight", ""),
             "rate": exchange_rate["rate"],
             "estimated_tax_rate_cny_per_kg": predict_tax_price,
-
             "Volume": volume_for_this_product,
             "usage": product_record.get("用途"),
             "texture": product_record.get("材质"),
@@ -396,9 +416,9 @@ def process_shipping_data(
             "estimated_tax_amount": totalyugutax,
         }
 
-        detail_data_log['net_weight'] = net_weight_for_this_product
-        detail_data_log['gross_weight'] = gross_weight_for_this_product
-        detail_data_log['volume'] = volume_for_this_product
+        detail_data_log["net_weight"] = net_weight_for_this_product
+        detail_data_log["gross_weight"] = gross_weight_for_this_product
+        detail_data_log["volume"] = volume_for_this_product
 
         detail_data_log_list.append(detail_data_log)
 
@@ -408,7 +428,7 @@ def process_shipping_data(
     good_type_totals = {}
     for p in results:
         good_type = p.get("good_type", "未知")
-        if isinstance(good_type,list):
+        if isinstance(good_type, list):
             good_type = good_type[0]
         good_type_totals[good_type] = good_type_totals.get(good_type, 0) + p.get(
             "total_price", 0
@@ -453,10 +473,13 @@ def process_shipping_data_canada(
     totalyugutax: float,
     predict_tax_price: float,
     session: MongoClient = Depends(get_session),
-    execute_type:str="Air",
+    execute_type: str = "Air",
 ):
     db = session
-    exchange_rate = db.exchange_rates.find_one({"version": "latest","type":"加币人民币汇率"})
+    exchange_rate = db.exchange_rates.find_one({
+        "version": "latest",
+        "type": "加币人民币汇率",
+    })
     num_products = sum([i.box_num for i in product_list])
     if num_products == 0:
         raise ValueError("Product list cannot be empty")
@@ -476,9 +499,9 @@ def process_shipping_data_canada(
     receiver_record = db.consignees.find_one({"发货人": receiver_name.upper()})
 
     # 查询发货人地址
-    shipper_record = db.consignees.find_one(
-        {"发货人": {"$regex": f"^{shipper_name}$", "$options": "i"}}
-    )
+    shipper_record = db.consignees.find_one({
+        "发货人": {"$regex": f"^{shipper_name}$", "$options": "i"}
+    })
     # 查询收件人地址
 
     if not shipper_record:
@@ -491,7 +514,7 @@ def process_shipping_data_canada(
     detail_data_log_list = []
 
     def safe_round(value, product_naem, default=0.0):
-        if not  value:
+        if not value:
             return default
         if value == "/":
             raise ValueError(f"Product '{product_naem}' value is empty or '/'")
@@ -501,7 +524,7 @@ def process_shipping_data_canada(
             return default
 
     def safe_float(value, product_naem, default=0.0):
-        if not  value:
+        if not value:
             return default
         if value == "/":
             raise ValueError(f"Product '{product_naem}' value is empty or '/'")
@@ -514,13 +537,15 @@ def process_shipping_data_canada(
         product_name = product.product_name
         box_num = product.box_num
         if execute_type == "Air":
-            product_record = db.products.find_one(
-                {"中文品名": product_name, "destination": "Canada"}
-            )
+            product_record = db.products.find_one({
+                "中文品名": product_name,
+                "destination": "Canada",
+            })
         else:
-            product_record = db.products_sea.find_one(
-                {"中文品名": product_name, "destination": "Canada"}
-            )
+            product_record = db.products_sea.find_one({
+                "中文品名": product_name,
+                "destination": "Canada",
+            })
         if not product_record:
             raise ValueError(f"Product '{product_name}' not found in database")
 
@@ -615,7 +640,9 @@ def process_shipping_data_canada(
             volume_for_this_product = round(avg_volume * box_num, 2)
             accumulated_volume += volume_for_this_product
 
-        net_weight_for_this_product = round(gross_weight_for_this_product * random.uniform(0.68, 0.72), 2)
+        net_weight_for_this_product = round(
+            gross_weight_for_this_product * random.uniform(0.68, 0.72), 1
+        )
 
         product_data = {
             "MasterBillNo": master_bill_no,
@@ -636,13 +663,12 @@ def process_shipping_data_canada(
             "ChineseName": product_record.get("中文品名"),
             "GrossWeight": gross_weight_for_this_product,
             "net_weight": net_weight_for_this_product,
-            "single_weight": product_record.get("single_weight",""),
+            "single_weight": product_record.get("single_weight", ""),
             "Volume": volume_for_this_product,
             "usage": product_record.get("用途"),
             "texture": product_record.get("材质"),
             "rate": exchange_rate["rate"],
             "estimated_tax_rate_cny_per_kg": predict_tax_price,
-
             # "address_name": address_name or "",
             # "address": address or "",
             "note": product_record.get("豁免代码"),
@@ -661,7 +687,7 @@ def process_shipping_data_canada(
     good_type_totals = {}
     for p in results:
         good_type = p.get("good_type", "未知")
-        if isinstance(good_type,list):
+        if isinstance(good_type, list):
             good_type = good_type[0]
         good_type_totals[good_type] = good_type_totals.get(good_type, 0) + p.get(
             "total_price", 0
@@ -695,6 +721,7 @@ def process_shipping_data_canada(
     }
     return results, summary_log_data
 
+
 class PackingOptimizationRequest(BaseModel):
     products_data: List[Dict] = []
     W_target: float = 3537
@@ -704,10 +731,12 @@ class PackingOptimizationRequest(BaseModel):
     exchange_rate: float = 7.22
     k: int = 3
     min_boxes_per_product: int = 20
-    expansion_factor:Optional[float] = None
-    startland:str
-    destination:str
+    expansion_factor: Optional[float] = None
+    startland: str
+    destination: str
     transport_type: str  # "air" 或 "sea"
+
+
 @qingguan_router.post("/packing_selection_optimize", summary="最优箱数调整")
 def packing_selection_optimize(upload_data: PackingOptimizationRequest):
     # 如果products_data为空，则从API获取
@@ -717,7 +746,7 @@ def packing_selection_optimize(upload_data: PackingOptimizationRequest):
             api_token=token,
             startland=upload_data.startland,
             destination=upload_data.destination,
-            transport_type=upload_data.transport_type
+            transport_type=upload_data.transport_type,
         )
         # 检查API返回的数据
         if not products_data:
@@ -726,7 +755,7 @@ def packing_selection_optimize(upload_data: PackingOptimizationRequest):
                 "success": False,
                 "error": "无法从API获取产品数据",
                 "selected_products": [],
-                "summary": {}
+                "summary": {},
             }
     else:
         products_data = upload_data.products_data
@@ -741,11 +770,12 @@ def packing_selection_optimize(upload_data: PackingOptimizationRequest):
         exchange_rate=upload_data.exchange_rate,
         k=upload_data.k,
         min_boxes_per_product=upload_data.min_boxes_per_product,
-        expansion_factor=upload_data.expansion_factor
-
+        expansion_factor=upload_data.expansion_factor,
     )
 
     return result
+
+
 @qingguan_router.post("/process-shipping-data", summary="处理清关数据并生成文件")
 async def process_shipping_data_endpoint(
     request: ShippingRequest,
@@ -766,8 +796,8 @@ async def process_shipping_data_endpoint(
                 predict_tax_price=request.predict_tax_price,
                 execute_type=request.execute_type,
                 session=session,
-        )
-        else:   
+            )
+        else:
             logger.info(f"request_data:{request}")
             results, summary_log = process_shipping_data(
                 shipper_name=request.shipper_name,
@@ -781,14 +811,15 @@ async def process_shipping_data_endpoint(
                 execute_type=request.execute_type,
                 export_country=request.export_country,
                 session=session,
-                port_name = request.port,
+                port_name=request.port,
                 operate_type=request.operate_type,
-        )
+            )
 
         if isinstance(results, dict) and results.get("product_attribute"):
-            return JSONResponse(
-                {"status": "False", "content": results.get("product_attribute")}
-            )
+            return JSONResponse({
+                "status": "False",
+                "content": results.get("product_attribute"),
+            })
         if (
             isinstance(results, dict)
             and results.get("type") == "net_weight大于gross_weight"
@@ -796,19 +827,22 @@ async def process_shipping_data_endpoint(
             return JSONResponse({"status": "False", "content": results.get("msg")})
         results[0]["export_country"] = request.export_country
         if request.import_country == "Canada":
-            pdf_path = generate_excel_from_template_canada(results, request.totalyugutax,request.currency_type)
+            pdf_path = generate_excel_from_template_canada(
+                results, request.totalyugutax, request.currency_type
+            )
             shenhe_excel_path = generate_admin_shenhe_canada_template(
-            results, request.totalyugutax
-        )
+                results, request.totalyugutax
+            )
         else:
-            pdf_path = generate_excel_from_template_test(results, request.totalyugutax,request.port)
+            pdf_path = generate_excel_from_template_test(
+                results, request.totalyugutax, request.port
+            )
             # pdf_path = generate_excel_from_new_template_test(results, request.totalyugutax,request.port)
 
             shenhe_excel_path = generate_admin_shenhe_template(
-            results, request.totalyugutax
-        )
-       
-        
+                results, request.totalyugutax
+            )
+
         # 获取上下文之中的user
         user = context_request.state.user
         summary_log["user_id"] = user["sub"]
@@ -816,8 +850,7 @@ async def process_shipping_data_endpoint(
         summary_log["port"] = request.port
         summary_log["filename"] = Path(pdf_path).name
         summary_log["shenhe_excel_path"] = Path(shenhe_excel_path).name
-        if   "TEST"  not in Path(pdf_path).name.split("-")[1].upper():
-       
+        if "TEST" not in Path(pdf_path).name.split("-")[1].upper():
             try:
                 minio_client = MinioClient(
                     os.getenv("MINIO_ENDPOINT"),
@@ -827,7 +860,9 @@ async def process_shipping_data_endpoint(
                     secure=False,
                 )
                 minio_client.connect()
-                minio_client.upload_file(pdf_path, f"qingguan_pdf/{Path(pdf_path).name}")
+                minio_client.upload_file(
+                    pdf_path, f"qingguan_pdf/{Path(pdf_path).name}"
+                )
                 minio_client.upload_file(
                     shenhe_excel_path,
                     f"qingguan_shenhe_excel/{Path(shenhe_excel_path).name}",
@@ -865,9 +900,10 @@ async def process_shipping_data_endpoint(
         return JSONResponse({"status": "False", "content": f"Value Error: {str(e)}"})
     except Exception as e:
         logger.error(f"Internal Server Error: {str(e)}---{traceback.format_exc()}")
-        return JSONResponse(
-            {"status": "False", "content": f"Internal Server Error: {str(e)}"}
-        )
+        return JSONResponse({
+            "status": "False",
+            "content": f"Internal Server Error: {str(e)}",
+        })
 
 
 @qingguan_router.get("/download/{file_name}", summary="下载文件（MinIO）")
@@ -879,9 +915,9 @@ async def download_file(file_name: str):
         return FileResponse(
             path=local_path,
             media_type="application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename={encoded_filename}"}
+            headers={"Content-Disposition": f"attachment; filename={encoded_filename}"},
         )
-    
+
     minio_client = MinioClient(
         os.getenv("MINIO_ENDPOINT"),
         os.getenv("MINIO_ACCESS_KEY"),
@@ -913,14 +949,23 @@ async def download_file(file_name: str):
         headers={"Content-Disposition": f"attachment; filename={encoded_filename}"},
     )
 
+
 @qingguan_router.get("/api/exchange-rate", summary="获取汇率")
-def get_exchange_rate(rate_type: str="USDCNY",session: MongoClient = Depends(get_session)):
+def get_exchange_rate(
+    rate_type: str = "USDCNY", session: MongoClient = Depends(get_session)
+):
     url = "https://finance.pae.baidu.com/selfselect/sug?wd=%E7%BE%8E%E5%85%83%E4%BA%BA%E6%B0%91%E5%B8%81&skip_login=1&finClientType=pc"
     db = session
     if rate_type == "USDCNY":
-        exchange_rate = db.exchange_rates.find_one({"version": "latest","type":"美金人民币汇率"})
+        exchange_rate = db.exchange_rates.find_one({
+            "version": "latest",
+            "type": "美金人民币汇率",
+        })
     elif rate_type == "CADCNY":
-        exchange_rate = db.exchange_rates.find_one({"version": "latest","type":"加币人民币汇率"})
+        exchange_rate = db.exchange_rates.find_one({
+            "version": "latest",
+            "type": "加币人民币汇率",
+        })
     else:
         raise HTTPException(status_code=400, detail="汇率类型不支持")
     print(exchange_rate)
@@ -932,8 +977,39 @@ def get_exchange_rate(rate_type: str="USDCNY",session: MongoClient = Depends(get
     return {"USDCNY": rate}
 
 
+@qingguan_router.get("/update-md/latest", summary="获取最新的清关更新MD文档")
+def get_latest_update_md():
+    """获取 file/qingguan_update_md 目录下最新的 md 文件内容"""
+    md_dir = Path("./file/qingguan_update_md")
+    if not md_dir.exists():
+        return JSONResponse({"status": "False", "content": "更新文档目录不存在"})
+
+    # 筛选 qingguan_update_ 开头的 .md 文件，按文件名排序取最新
+    md_files = sorted(
+        [f for f in md_dir.glob("qingguan_update_*.md") if f.is_file()],
+        key=lambda f: f.name,
+        reverse=True,
+    )
+    if not md_files:
+        return JSONResponse({"status": "False", "content": "暂无更新文档"})
+
+    latest_file = md_files[0]
+    try:
+        content = latest_file.read_text(encoding="utf-8")
+    except Exception as e:
+        logger.error(f"读取MD文件失败: {e}")
+        return JSONResponse({"status": "False", "content": f"读取文件失败: {str(e)}"})
+
+    return JSONResponse({
+        "status": "True",
+        "file_name": latest_file.name,
+        "content": content,
+    })
+
+
 class ExcelExtractRequest(BaseModel):
     """Excel提取请求参数"""
+
     use_cache: bool = True
     confidence_threshold: float = 0.8
 
@@ -958,13 +1034,13 @@ async def extract_excel_data(
         JSON格式的DataFrame数据
     """
     # 检查文件类型
-    if not file.filename.endswith(('.xlsx', '.xls')):
+    if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 格式的文件")
 
     # 读取 API 配置
     api_key = os.environ.get("OPENAI_API_KEY", "")
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.minimaxi.com/v1")
-    model = os.environ.get("OPENAI_MODEL", "MiniMax-M2.7")
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com")
+    model = os.environ.get("OPENAI_MODEL", "deepseek-v4-flash")
 
     if not api_key:
         raise HTTPException(status_code=500, detail="未配置 OPENAI_API_KEY")
@@ -981,17 +1057,17 @@ async def extract_excel_data(
 
         # 创建提取器
         extractor = AutoGenExcelExtractor(
-            api_key=api_key,
-            base_url=base_url,
-            model=model
+            api_key=api_key, base_url=base_url, model=model
         )
 
         # 调用智能提取方法
         records = extractor.extract_smart(
             file_path=str(temp_file_path),
-            output_path=str(temp_dir / f"{file.filename}_output.xlsx"),  # 临时输出路径，不会实际使用
+            output_path=str(
+                temp_dir / f"{file.filename}_output.xlsx"
+            ),  # 临时输出路径，不会实际使用
             use_cache=use_cache,
-            confidence_threshold=confidence_threshold
+            confidence_threshold=confidence_threshold,
         )
 
         # 将 List[ProductRecord] 转换为 DataFrame
@@ -1005,7 +1081,7 @@ async def extract_excel_data(
             "status": "success",
             "total": len(records),
             "data": df.to_dict(orient="records"),
-            "columns": df.columns.tolist()
+            "columns": df.columns.tolist(),
         })
 
     except Exception as e:
@@ -1015,6 +1091,7 @@ async def extract_excel_data(
         # 强制垃圾回收释放文件句柄，然后清理临时文件
         import gc
         import time
+
         gc.collect()
         time.sleep(0.2)  # 等待文件句柄释放
 
@@ -1030,4 +1107,3 @@ async def extract_excel_data(
                 time.sleep(0.2)
         else:
             logger.warning(f"临时文件无法删除，可能被占用: {temp_file_path}")
-

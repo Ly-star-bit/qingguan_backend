@@ -266,9 +266,9 @@ def cron_job():
             port_code_full_english_name_mapping[port['port_code']] = port['port_name_yw']
     
     # 初始化 Morelink 客户端
-    node_path = find_playwright_node_path()
-    morelink_client = MoreLinkClient(node_path)
-    morelink_data = morelink_client.zongdan_api_httpx()
+    # node_path = find_playwright_node_path()
+    # morelink_client = MoreLinkClient(node_path)
+    # morelink_data = morelink_client.zongdan_api_httpx()
 
     hubs_field_mapping = {
         "hbl_no": "hblno",
@@ -302,12 +302,12 @@ def cron_job():
             if filter_data:
                 source_system = "hubs"
                 field_mapping = hubs_field_mapping
-            else:
-                # 从 Morelink 旧系统查询
-                filter_data = [row for row in morelink_data if row.get("billno") == master_bill_no]
-                if filter_data:
-                    source_system = "morelink"
-                    field_mapping = morelink_field_mapping
+            # else:
+            #     # 从 Morelink 旧系统查询
+            #     filter_data = [row for row in morelink_data if row.get("billno") == master_bill_no]
+            #     if filter_data:
+            #         source_system = "morelink"
+            #         field_mapping = morelink_field_mapping
             
             mapped_data = []
             for item in filter_data:

@@ -46,3 +46,8 @@ dependencies = [
     "schedule>=1.2.2",
     "openai>=2.30.0",
 ]
+
+
+[tool.ty.rules]
+# 把所有规则默认降为 warn
+all = "warn"

@@ -1,13 +1,12 @@
 import os
-import sys
-from datetime import datetime, timedelta
-import time
-from pathlib import Path
-import random
-import zipfile
 import platform
-
-
+import random
+import re
+import sys
+import time
+import zipfile
+from datetime import datetime, timedelta
+from pathlib import Path
 
 # Add the AsposeCells_net directory to the path
 aspose_dir = os.path.join(os.getcwd(), "AsposeCells_net")
@@ -25,13 +24,12 @@ import clr
 clr.AddReference("Aspose.Cells")
 
 # Import Aspose.Cells namespaces
-import Aspose.Cells as Ac
 from Aspose.Cells import (
-    Workbook,
     License,
     PdfSaveOptions,
-    TextAlignmentType,
     SaveFormat,
+    TextAlignmentType,
+    Workbook,
 )
 from Aspose.Cells.Rendering import PdfCompliance, SheetSet
 
@@ -111,7 +109,9 @@ class AsposeCellsNETHandler:
         # style.VerticalAlignment = TextAlignmentType.Center
         # cell.SetStyle(style)
 
-    def excel_to_pdf(self, excel_path, pdf_save_path=None, sheet_name=None):
+    def excel_to_pdf(
+        self, excel_path, pdf_save_path=None, sheet_name=None, output_sheet_names=None
+    ):
         """
         将Excel文件转换为PDF
 
@@ -119,6 +119,8 @@ class AsposeCellsNETHandler:
             excel_path (str): Excel文件路径
             pdf_save_path (str): PDF保存路径，如果为None则使用与Excel文件相同的路径
             sheet_name (str): 指定要转换的sheet名称，如果为None则转换所有sheet
+            output_sheet_names (list): 指定要转换的多个sheet名称列表，为None则不生效。
+                                       优先级高于sheet_name。
 
         Returns:
             str: 生成的PDF文件路径
@@ -139,14 +141,23 @@ class AsposeCellsNETHandler:
             # 配置PDF保存选项
             saveOption = PdfSaveOptions()
 
+            # 如果指定了output_sheet_names，按名称列表导出多个sheet
+            if output_sheet_names:
+                ids = []
+                for i in wb.Worksheets:
+                    if i.Name in output_sheet_names:
+                        ids.append(i.Index)
+                if not ids:
+                    raise Exception(f"未找到指定的工作表: {output_sheet_names}")
+                saveOption.SheetSet = SheetSet(ids)
             # 如果指定了sheet_name，则只导出该sheet
-            if sheet_name:
+            elif sheet_name:
                 ids = []
                 for i in wb.Worksheets:
                     if i.Name == sheet_name:
                         ids.append(i.Index)
                         break
-                
+
                 if ids:
                     saveOption.SheetSet = SheetSet(ids)
                 else:
@@ -154,7 +165,9 @@ class AsposeCellsNETHandler:
             else:
                 # 导出所有sheet
                 visible_ids = [i.Index for i in wb.Worksheets if i.IsVisible]
-                saveOption.SheetSet = SheetSet(visible_ids) if visible_ids else SheetSet([0])
+                saveOption.SheetSet = (
+                    SheetSet(visible_ids) if visible_ids else SheetSet([0])
+                )
 
             # 确保每个工作表单独保存为一个PDF页面
             saveOption.OnePagePerSheet = True
@@ -216,8 +229,8 @@ class AsposeCellsNETHandler:
             wb = Workbook(template_path)
             civ_sheet = wb.Worksheets["CIV"]
             pl_sheet = wb.Worksheets["PL"]
-            huomian_explaination_sheet = wb.Worksheets["豁免说明"]
-            
+            # huomian_explaination_sheet = wb.Worksheets["豁免说明"]
+
             # 填充CIV工作表内容
             if data and len(data) > 0:
                 # 填充头部信息
@@ -247,7 +260,7 @@ class AsposeCellsNETHandler:
                 self.set_cell_value(pl_sheet, 6, 9, doc_number)
                 self.set_cell_value(pl_sheet, 7, 9, datetime.now().strftime("%Y/%m/%d"))
                 if data[0]["export_country"] == "Vietnam":
-                    self.set_cell_value(pl_sheet,8, 9, "MADE IN VIETNAM")
+                    self.set_cell_value(pl_sheet, 8, 9, "MADE IN VIETNAM")
                     self.set_cell_value(civ_sheet, 9, 9, "MADE IN VIETNAM")
 
                 if data[0]["execute_type"] == "Sea":
@@ -265,9 +278,16 @@ class AsposeCellsNETHandler:
                     civ_row = start_row + index
                     pl_row = start_row - 1 + index  # PL表从13行开始
                     huomian_row = 5 + index
+                    # 预处理 HS_CODE：如果 note 非空且非 "/"，则先追加 (note) 再统一 format
+                    raw_hs_code = item.get("HS_CODE", "")
+                    note_val = item.get("note", "")
+                    if note_val and note_val.strip() and note_val != "/":
+                        raw_hs_code = f"{raw_hs_code}({note_val})"
+                    formatted_hs_code = format_hs_code(raw_hs_code)
+
                     # CIV表数据
                     self.set_cell_value(civ_sheet, civ_row, 1, index + 1)
-                    self.set_cell_value(civ_sheet, civ_row, 2, item.get("HS_CODE", ""))
+                    self.set_cell_value(civ_sheet, civ_row, 2, formatted_hs_code)
                     self.set_cell_value(
                         civ_sheet, civ_row, 3, item.get("DESCRIPTION", "")
                     )
@@ -293,7 +313,9 @@ class AsposeCellsNETHandler:
 
                     # PL表数据
                     self.set_cell_value(pl_sheet, pl_row, 1, index + 1)
-                    self.set_cell_value(pl_sheet, pl_row, 2, item.get("HS_CODE", ""))
+                    self.set_cell_value(
+                        pl_sheet, pl_row, 2, format_hs_code(item.get("HS_CODE", ""))
+                    )
                     self.set_cell_value(
                         pl_sheet, pl_row, 3, item.get("DESCRIPTION", "")
                     )
@@ -312,30 +334,30 @@ class AsposeCellsNETHandler:
                         pl_sheet.Cells.InsertRow(pl_row)
 
                     # Fill 豁免说明
-                    self.set_cell_value(
-                        huomian_explaination_sheet, huomian_row, 1, item["HS_CODE"]
-                    )
-                    self.set_cell_value(
-                        huomian_explaination_sheet, huomian_row, 2, item["DESCRIPTION"]
-                    )
-                    self.set_cell_value(
-                        huomian_explaination_sheet, huomian_row, 3, item["usage"]
-                    )
-                    self.set_cell_value(
-                        huomian_explaination_sheet, huomian_row, 4, item["note"]
-                    )
-                    self.set_cell_value(
-                        huomian_explaination_sheet,
-                        huomian_row,
-                        5,
-                        item["note_explaination"],
-                    )
+                    # self.set_cell_value(
+                    #     huomian_explaination_sheet, huomian_row, 1, item["HS_CODE"]
+                    # )
+                    # self.set_cell_value(
+                    #     huomian_explaination_sheet, huomian_row, 2, item["DESCRIPTION"]
+                    # )
+                    # self.set_cell_value(
+                    #     huomian_explaination_sheet, huomian_row, 3, item["usage"]
+                    # )
+                    # self.set_cell_value(
+                    #     huomian_explaination_sheet, huomian_row, 4, item["note"]
+                    # )
+                    # self.set_cell_value(
+                    #     huomian_explaination_sheet,
+                    #     huomian_row,
+                    #     5,
+                    #     item["note_explaination"],
+                    # )
                     # if item["huomian_file_name"]:
                     #     pic_path = os.path.join("./file/huomian_file/",item["huomian_file_name"])
 
                     # all_pic_path.append({"pic_path":pic_path,"new_name":item['DESCRIPTION']})
-                    huomian_explaination_sheet.AutoFitRow(huomian_row - 1)
-                    huomian_explaination_sheet.Cells.InsertRow(huomian_row)
+                    # huomian_explaination_sheet.AutoFitRow(huomian_row - 1)
+                    # huomian_explaination_sheet.Cells.InsertRow(huomian_row)
 
             # 创建输出目录
             Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -353,6 +375,7 @@ class AsposeCellsNETHandler:
             return output_path
         except Exception as e:
             raise Exception(f"生成Excel文件时出错: {str(e)}")
+
     def generate_excel_from_new_template(
         self, template_path, data, port, totalyugutax, output_dir="file"
     ):
@@ -378,7 +401,7 @@ class AsposeCellsNETHandler:
             if data and len(data) > 0:
                 # 填充头部信息
                 self.set_cell_value(civ_sheet, 2, 1, data[0].get("shipper_name", ""))
-                
+
                 self.set_cell_value(civ_sheet, 3, 1, data[0].get("shipper_address", ""))
 
                 receiver_info = f"{data[0].get('receiver_name', '')}\n{data[0].get('receiver_address', '')}"
@@ -393,7 +416,6 @@ class AsposeCellsNETHandler:
                 self.set_cell_value(civ_sheet, 10, 10, doc_number)
                 self.set_cell_value(civ_sheet, 11, 10, doc_number)
 
-
                 # 填充PL工作表内容
                 self.set_cell_value(pl_sheet, 2, 1, data[0].get("shipper_name", ""))
                 self.set_cell_value(pl_sheet, 3, 1, data[0].get("shipper_address", ""))
@@ -401,30 +423,31 @@ class AsposeCellsNETHandler:
                 self.set_cell_value(pl_sheet, 10, 10, doc_number)
                 self.set_cell_value(pl_sheet, 11, 10, doc_number)
 
-                self.set_cell_value(huomian_explaination_sheet, 2, 1, data[0].get("shipper_name", ""))
-                self.set_cell_value(huomian_explaination_sheet, 3, 1, data[0].get("shipper_address", ""))
+                self.set_cell_value(
+                    huomian_explaination_sheet, 2, 1, data[0].get("shipper_name", "")
+                )
+                self.set_cell_value(
+                    huomian_explaination_sheet, 3, 1, data[0].get("shipper_address", "")
+                )
                 self.set_cell_value(huomian_explaination_sheet, 6, 3, receiver_info)
                 self.set_cell_value(huomian_explaination_sheet, 10, 10, doc_number)
                 self.set_cell_value(huomian_explaination_sheet, 11, 10, doc_number)
 
                 if data[0]["export_country"] == "Vietnam":
-                    self.set_cell_value(pl_sheet,10, 3, "VIETNAM")
+                    self.set_cell_value(pl_sheet, 10, 3, "VIETNAM")
                     self.set_cell_value(civ_sheet, 10, 3, "VIETNAM")
                     self.set_cell_value(huomian_explaination_sheet, 10, 3, "VIETNAM")
-
 
                 if data[0]["execute_type"] == "Sea":
                     self.set_cell_value(civ_sheet, 11, 3, "SEA")
                     self.set_cell_value(pl_sheet, 11, 3, "SEA")
                     self.set_cell_value(huomian_explaination_sheet, 11, 3, "SEA")
 
-
-
                 # 填充数据行
                 start_row = 14
                 for index, item in enumerate(data):
                     civ_row = start_row + index
-                    pl_row = start_row  + index  
+                    pl_row = start_row + index
                     huomian_row = start_row + index
                     # CIV表数据
                     self.set_cell_value(civ_sheet, civ_row, 1, index + 1)
@@ -477,17 +500,13 @@ class AsposeCellsNETHandler:
 
                     # Fill 豁免说明
                     self.set_cell_value(
-                        huomian_explaination_sheet, huomian_row, 1,index+1
+                        huomian_explaination_sheet, huomian_row, 1, index + 1
                     )
                     self.set_cell_value(
                         huomian_explaination_sheet, huomian_row, 2, item["DESCRIPTION"]
                     )
-                    self.set_cell_value(
-                        huomian_explaination_sheet, huomian_row, 3, ""
-                    )
-                    self.set_cell_value(
-                        huomian_explaination_sheet, huomian_row, 4, ""
-                    )
+                    self.set_cell_value(huomian_explaination_sheet, huomian_row, 3, "")
+                    self.set_cell_value(huomian_explaination_sheet, huomian_row, 4, "")
 
                     # if item["huomian_file_name"]:
                     #     pic_path = os.path.join("./file/huomian_file/",item["huomian_file_name"])
@@ -584,7 +603,7 @@ class AsposeCellsNETHandler:
             # 处理舱单
             self.set_cell_value(cangdan_sheet, 3, 9, data["orderNumber"])
             self.set_cell_value(
-                cangdan_sheet, 5, 9, f"{data['flight_no']}/{data.get('etd','')}"
+                cangdan_sheet, 5, 9, f"{data['flight_no']}/{data.get('etd', '')}"
             )
 
             cangdan_row = 11
@@ -730,7 +749,7 @@ class AsposeCellsNETHandler:
                 pl_row = 13 + index
 
                 # Fill CIV
-                self.set_cell_value(civ_sheet, civ_row, 1, f"=ROW()-ROW($A$13)+1")
+                self.set_cell_value(civ_sheet, civ_row, 1, "=ROW()-ROW($A$13)+1")
                 self.set_cell_value(civ_sheet, civ_row, 2, item["HS_CODE"])
                 self.set_cell_value(civ_sheet, civ_row, 3, item["DESCRIPTION"])
                 self.set_cell_value(civ_sheet, civ_row, 4, item["quanity"])
@@ -743,7 +762,7 @@ class AsposeCellsNETHandler:
                 civ_sheet.AutoFitRow(civ_row - 1)
 
                 # Fill PL
-                self.set_cell_value(pl_sheet, pl_row, 1, f"=ROW()-ROW($A$13)+1")
+                self.set_cell_value(pl_sheet, pl_row, 1, "=ROW()-ROW($A$13)+1")
                 self.set_cell_value(pl_sheet, pl_row, 2, item["HS_CODE"])
                 self.set_cell_value(pl_sheet, pl_row, 3, item["DESCRIPTION"])
                 self.set_cell_value(pl_sheet, pl_row, 4, item["quanity"])
@@ -758,9 +777,10 @@ class AsposeCellsNETHandler:
                     pic_path = os.path.join(
                         "./file/huomian_file/", item["huomian_file_name"]
                     )
-                    all_pic_path.append(
-                        {"pic_path": pic_path, "new_name": item["DESCRIPTION"]}
-                    )
+                    all_pic_path.append({
+                        "pic_path": pic_path,
+                        "new_name": item["DESCRIPTION"],
+                    })
 
                 if index == len(data) - 1:
                     # 如果是最后一个循环的数据，则不需要再添加一行了
@@ -785,6 +805,7 @@ class AsposeCellsNETHandler:
             return pdf_path
         except Exception as e:
             raise Exception(f"生成加拿大模板Excel文件时出错: {str(e)}")
+
     def shenzhen_air_pdf_generate(self, data: list):
         """
         生成深圳海关PDF文件
@@ -798,10 +819,10 @@ class AsposeCellsNETHandler:
         try:
             template_path = "HAWB模板-空+海_测试新版.xls"
             wb = Workbook(template_path)
-            
+
             # 获取"录入页面"sheet
             luru_sheet = wb.Worksheets["录入页面"]
-            
+
             def set_cell_value_internal(sheet, row, column, value):
                 if value is None:
                     value = ""
@@ -849,6 +870,7 @@ class AsposeCellsNETHandler:
             return pdf_file
         except Exception as e:
             raise Exception(f"生成深圳海关PDF文件时出错: {str(e)}")
+
     def shenzhen_customes_pdf_generate(self, data, filter_data):
         """
         生成深圳海关PDF文件
@@ -1307,7 +1329,44 @@ class AsposeCellsNETHandler:
 
 handler = AsposeCellsNETHandler()
 # 兼容性函数，保持与原有utils.py类似的接口
-import time
+
+
+def format_hs_code(hs_code: str) -> str:
+    """
+    将 HS_CODE 按括号（中英文）拆分，每个括号内容块及其前的文本块分别换行。
+    例如：
+        "12412414(124124)"           -> "12412414\n(124124)"
+        "ABC(123)DE(456)FG"          -> "ABC\n(123)\nDE\n(456)\nFG"
+        "(A)B(C)"                    -> "\n(A)\nB\n(C)"   # 注意开头可能有多余换行，可 strip 但一般不推荐去除
+        无括号时返回原字符串。
+    """
+    if not hs_code:
+        return ""
+
+    # 匹配中英文括号及其内容（非贪婪，不跨多个括号对，适用于无嵌套场景）
+    # 注意：此模式不能处理括号嵌套，但 HS_CODE 一般无嵌套。
+    pattern = r"[（(][^）)]*[）)]"
+
+    parts = []
+    last_end = 0
+
+    for match in re.finditer(pattern, hs_code):
+        start, end = match.span()
+        # 括号前的文本
+        if start > last_end:
+            parts.append(hs_code[last_end:start])
+        # 括号及其内容
+        parts.append(match.group())
+        last_end = end
+
+    # 剩余文本
+    if last_end < len(hs_code):
+        parts.append(hs_code[last_end:])
+
+    # 过滤空块（例如字符串以括号开头时，第一个空块会出现）
+    parts = [p for p in parts if p]
+
+    return "\n".join(parts)
 
 
 def excel2pdf(excel_path: str, pdf_save_path: str = None) -> str:
@@ -1356,11 +1415,13 @@ def generate_excel_from_template_test(
     )
 
     # 转换为PDF
-    pdf_path = handler.excel_to_pdf(excel_path, "pdf")
+    pdf_path = handler.excel_to_pdf(excel_path, "pdf", output_sheet_names=["CIV", "PL"])
     end_time = time.time()
     print(f"generate_excel_from_template_test 运行时间: {end_time - start_time:.2f} 秒")
 
     return pdf_path
+
+
 def generate_excel_from_new_template_test(
     data,
     totalyugutax,
@@ -1393,6 +1454,7 @@ def generate_excel_from_new_template_test(
     print(f"generate_excel_from_template_test 运行时间: {end_time - start_time:.2f} 秒")
 
     return pdf_path
+
 
 def generate_fencangdan_file(data):
     """
@@ -1453,6 +1515,8 @@ def shenzhen_customes_pdf_gennerate(data, filter_data):
     end_time = time.time()
     print(f"shenzhen_customes_pdf_gennerate 运行时间: {end_time - start_time:.2f} 秒")
     return result
+
+
 def shenzhen_air_pdf_gennerate(data):
     """
     生成深圳海关PDF文件
@@ -1470,6 +1534,7 @@ def shenzhen_air_pdf_gennerate(data):
     end_time = time.time()
     print(f"shenzhen_customes_pdf_gennerate 运行时间: {end_time - start_time:.2f} 秒")
     return result
+
 
 def generate_admin_shenhe_template(data, totalyugutax):
     """

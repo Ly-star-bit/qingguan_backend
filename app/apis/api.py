@@ -161,7 +161,7 @@ async def sync_from_openapi(request: Request, session=Depends(get_session)):
 
     for path, path_item in paths.items():
         # 跳过 OpenAPI 自身和管理接口
-        if any(path.startswith(prefix) for prefix in ["/docs", "/redoc", "/openapi", "/api_endpoints"]):
+        if any(path.startswith(prefix) for prefix in ["/docs", "/redoc", "/openapi", "/api_endpoints", "/api/api_endpoints"]):
             continue
 
         for method, operation in path_item.items():

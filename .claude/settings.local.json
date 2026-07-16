@@ -1,37 +1,38 @@
 {
-  "hooks": {
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "async": true,
-            "command": "\"D:\\\\cc-panes\\\\binaries\\\\cc-panes-cli-hook.exe\" plan-archive",
-            "timeout": 5,
-            "type": "command"
-          }
-        ],
-        "matcher": ""
-      }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "async": true,
-            "command": "\"D:\\\\cc-panes\\\\binaries\\\\cc-panes-cli-hook.exe\" session-start",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "startup"
-      }
-    ]
-  },
   "permissions": {
     "allow": [
       "Bash(python:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(ls:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"D:\\\\cc-panes\\\\binaries\\\\cc-panes-cli-hook.exe\" plan-archive",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"D:\\\\cc-panes\\\\binaries\\\\cc-panes-cli-hook.exe\" session-start",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
     ]
   }
 }

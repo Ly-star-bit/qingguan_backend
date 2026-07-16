@@ -29,6 +29,9 @@ async def require_products_permission(
             detail="Unauthenticated: missing sub",
         )
     obj = request.url.path
+    # /api 前缀只在路由层使用，Casbin 策略里不包含
+    if obj.startswith("/api/"):
+        obj = obj[4:]
     act = request.method
     logger.info(f"require_products_permission - obj: {obj}, act: {act}")
 

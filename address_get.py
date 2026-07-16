@@ -1,11 +1,12 @@
 import os
+import shutil
 import time
 import uuid
 import pandas as pd
 from datetime import datetime
 from loguru import logger
 import httpx
-from pymongo import MongoClient
+from pymongo import MongoClient, UpdateOne
 from dotenv import load_dotenv
 import random
 
@@ -572,6 +573,7 @@ class AddressProcessor:
             logger.info("开始保存数据到数据库...")
             excel_name = os.path.basename(excel_path)
             
+            bulk_operations = []
             for _, row in df.iterrows():
                 client_id = str(row['客户'])
                 street = str(row['收件人地址1'])
@@ -579,10 +581,10 @@ class AddressProcessor:
                 city = str(row['收件人城市'])
                 state = str(row['收件人省洲'])
                 zipcode = str(row['收件人邮编'])
-                
+
                 # 获取偏远信息
                 remote_type = remote_info.get(client_id, '未知')
-                
+
                 # 准备文档数据
                 doc = {
                     'client_id': client_id,
@@ -600,15 +602,25 @@ class AddressProcessor:
                     'email_sender': self.email_sender if self.email_sender else "yu.luo@hubs-scs.com",
                     'status': 0  # 初始状态为0
                 }
-                
+
                 # 使用client_id和excel_name作为唯一标识，如果存在则更新，不存在则插入
-                self.customer_info_collection.update_one(
-                    {
-                        'client_id': client_id,
-                        'excel_name': excel_name
-                    },
-                    {'$set': doc},
-                    upsert=True
+                bulk_operations.append(
+                    UpdateOne(
+                        {
+                            'client_id': client_id,
+                            'excel_name': excel_name
+                        },
+                        {'$set': doc},
+                        upsert=True
+                    )
+                )
+
+            # 批量写入数据库，减少网络往返次数
+            if bulk_operations:
+                result = self.customer_info_collection.bulk_write(bulk_operations, ordered=False)
+                logger.info(
+                    f"批量更新完成: 匹配 {result.matched_count} 条, "
+                    f"新增 {result.upserted_count} 条, 修改 {result.modified_count} 条"
                 )
                 
         except Exception as e:
@@ -808,20 +820,47 @@ def main():
     else:
         logger.info("没有未完成的数据需要处理")
 
+# def test():
+#     processor = AddressProcessor()
+#     excel_path = r"C:\Users\a1337\Desktop\6.1私人仓地址.xlsx"
+#     processor.process_excel_file(excel_path)
+#     processor.retry_failed_addresses()
+
 def test():
     processor = AddressProcessor()
-    # excel_path = r"C:\Users\a1337\Desktop\5.14私人仓地址(1).xlsx"
-    # processor.process_excel_file(excel_path)
-    processor.retry_failed_addresses()
-if __name__ == "__main__":
-    # test()
-    import schedule
-    
-    schedule.every(60).seconds.do(main)
+    source_path = r"C:\Users\a1337\Desktop\6.1私人仓地址.xlsx"
+    excel_name = os.path.basename(source_path)
 
-    while True:
-        schedule.run_pending()
-        time.sleep(10)  # 等待1秒以避免CPU占用过高
+    # 0. 复制到 file/address_info 目录，与 main() 中邮件附件的保存路径保持一致，
+    #    否则 export_to_excel_by_name 会按该约定路径找不到原始文件
+    save_dir = os.path.join(os.getcwd(), 'file', 'address_info')
+    os.makedirs(save_dir, exist_ok=True)
+    excel_path = os.path.join(save_dir, excel_name)
+    shutil.copyfile(source_path, excel_path)
+
+    # 1. 解析 Excel，获取偏远信息，存入数据库
+    processor.process_excel_file(excel_path)
+    logger.info("Excel数据已保存到数据库")
+
+    # 2. 获取 Smarty 地址信息
+    processor.process_smarty_address(excel_name)
+    logger.info("Smarty地址信息处理完成")
+
+    # 3. 导出处理后的数据到Excel（本地调试不发送邮件）
+    output_path = processor.export_to_excel_by_name(excel_name)
+    if output_path:
+        logger.info(f"处理结果已导出到: {output_path}")
+    else:
+        logger.warning("还有未处理完的记录，未生成导出文件")
+if __name__ == "__main__":
+    test()
+    # import schedule
+    
+    # schedule.every(60).seconds.do(main)
+
+    # while True:
+    #     schedule.run_pending()
+    #     time.sleep(10)  # 等待1秒以避免CPU占用过高
    
     
 

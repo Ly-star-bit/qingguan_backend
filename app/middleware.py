@@ -59,20 +59,20 @@ def is_excluded(path: str) -> bool:
             return True
     return False
 EXCLUDED_PATHS = {
-    "/login/",
-    "/docs*",           # 匹配 /docs, /docs/, /docsomething
-    "/openapi.json*",
-    "/redoc/",
-    "/qingguan/ip_white_list/",
-    "/qingguan/update-md/latest/",
-    "/excel-preview/",
-    "/luckysheet-preview/",
-    "/upload-excel-luckysheet/",
-    "/process_excel_usp_data/",
-    "/refresh/",
-    "/17track/notify/",
-    "/menu/user/get_user_menu_permissions/",
-    '/casbin/policies/filter/',
+    "/api/login/",
+    "/api/docs*",           # 匹配 /docs, /docs/, /docsomething
+    "/api/openapi.json*",
+    "/api/redoc/",
+    "/api/qingguan/ip_white_list/",
+    "/api/qingguan/update-md/latest/",
+    "/api/excel-preview/",
+    "/api/luckysheet-preview/",
+    "/api/upload-excel-luckysheet/",
+    "/api/process_excel_usp_data/",
+    "/api/refresh/",
+    "/api/17track/notify/",
+    "/api/menu/user/get_user_menu_permissions/",
+    '/api/casbin/policies/filter/',
 }
 
 # 前缀排除（用于 /static/xxx, /tiles/xxx 等）
@@ -132,9 +132,10 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
 
             subject = payload.get("sub")
             obj = path
+            # /api 前缀只在路由层使用，Casbin 策略里存的路径不带 /api
+            if obj.startswith("/api/"):
+                obj = obj[4:]
             action = request.method
-            # if len(obj) > 1 and not obj.endswith('/'):
-            #     obj = obj + '/'
             logger.info(f"{subject}-{obj}-{action}")
             # startland = request.query_params.get("startland")
             # destination = request.query_params.get("destination")

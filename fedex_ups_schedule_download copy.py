@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime
 from io import BytesIO
 import time
 import httpx
@@ -113,5 +113,5 @@ if __name__ == "__main__":
     # while True:
     #     schedule.run_pending()
     #     time.sleep(60)
-    # download_fedex_das_pdf()
+    download_fedex_das_pdf()
     download_ups_das_pdf()

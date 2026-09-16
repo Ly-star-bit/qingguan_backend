@@ -8,16 +8,17 @@
 
 import os
 import re
-import pandas as pd
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
 import sys
-from loguru import logger
-import clr
-from rpa_tools.utils.morelink_api import MoreLinkClient
-from app.tools_auto.utils.hubs.hubs_client import HubsClient
+from datetime import datetime
 
+import clr
+import pandas as pd
+from dateutil.relativedelta import relativedelta
+from loguru import logger
+
+from app.tools_auto.utils.hubs.hubs_client import HubsClient
 from rpa_tools import find_playwright_node_path
+from rpa_tools.utils.morelink_api import MoreLinkClient
 
 # Add the AsposeCells_net directory to the path
 aspose_dir = os.path.join(os.getcwd(), "AsposeCells_net")
@@ -29,11 +30,12 @@ sys.path.append(os.path.join(aspose_dir, "net40"))
 clr.AddReference("Aspose.Cells")
 
 # Import Aspose.Cells namespaces
-from Aspose.Cells import Workbook, SaveFormat, License
+from Aspose.Cells import License, SaveFormat, Workbook
 
 # 设置许可证
 license = License()
 license.SetLicense(license_path)
+
 
 def column_letter_to_number(column_letter):
     """将列字母转换为对应的列号（从1开始）。"""
@@ -97,9 +99,6 @@ def write_data_to_excel_aspose(
     return output_path if save_new_file else file_path
 
 
-
-
-
 def check_missing_worknums(work_num_str, dahuo_data, key="operNo"):
     # 将逗号分隔的字符串转换为工作号集合
     expected_worknums = set(split_work_nums(work_num_str))
@@ -125,14 +124,14 @@ def split_work_nums(work_num_str):
     例如: "A123,S456\nS789" 或 "A123A456S789" 都能正确分割。
     """
     # 先按逗号和换行分隔
-    parts = re.split(r'[,;\n]+', work_num_str)
+    parts = re.split(r"[,;\n]+", work_num_str)
     result = []
     for part in parts:
         part = part.strip()
         if not part:
             continue
         # 如果包含 A 或 S 开头的连续字符（如 A123A456S789），进一步拆分
-        matches = re.findall(r'[AS]\d+[A-Z0-9]*', part)
+        matches = re.findall(r"[AS]\d+[A-Z0-9]*", part)
         if matches:
             result.extend(matches)
         else:
@@ -145,14 +144,12 @@ def extract_date_from_worknum(work_num):
     从工号中提取年月日期，如 A202601 → datetime(2026, 1, 1)
     工号格式: A/S + 年份(2位) + 月份(2位)，如 A202601
     """
-    match = re.search(r'[AS](\d{2})(\d{2})\d{2}', work_num)
+    match = re.search(r"[AS](\d{2})(\d{2})\d{2}", work_num)
     if match:
         year = int(match.group(1)) + 2000  # 26 → 2026
         month = int(match.group(2))
         return datetime(year, month, 1)
     return None
-
-
 
 
 def hubs_zongdan_filter_json_data(data_list, orderno=None, billno=None):
@@ -181,11 +178,8 @@ def get_with_default(container, key, default):
     return default if (value == 0.0 or value is None) else value
 
 
-
-
 def execute(file_path):
     client = MoreLinkClient(node_path=find_playwright_node_path())
-
 
     zongdan_json_data = client.zongdan_api_httpx()
     end_date = datetime.now()
@@ -295,7 +289,10 @@ def execute(file_path):
                     # 默认就是True
                     fix_data["custom_type_right"] = False
                 # 获取大货单号的总KG
-                all_kilogram_dahuo = sum(get_with_default(i, "ckweight", get_with_default(i, "yjweight", 0)) for i in dahuo_data)
+                all_kilogram_dahuo = sum(
+                    get_with_default(i, "ckweight", get_with_default(i, "yjweight", 0))
+                    for i in dahuo_data
+                )
                 fix_data["dahuo_no_kg"] = all_kilogram_dahuo
                 # 大货号总kg和execl中总kg之差
                 weight_diff = all_kilogram_dahuo - all_kilogram
@@ -321,7 +318,13 @@ def execute(file_path):
                 fix_data["need_fentan_A#"] = dahuo_data_bill_no
                 #
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operNo"], get_with_default(i, "ckweight", get_with_default(i, "yjweight", 0))] for i in dahuo_data
+                    [
+                        i["operNo"],
+                        get_with_default(
+                            i, "ckweight", get_with_default(i, "yjweight", 0)
+                        ),
+                    ]
+                    for i in dahuo_data
                 ]
 
             elif "A2" not in origin_billno and row["类型"] == "买单":
@@ -336,7 +339,13 @@ def execute(file_path):
                 # 获取所有需要分摊的A#
                 fix_data["need_fentan_A#"] = ",".join([i["operNo"] for i in dahuo_data])
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operNo"], get_with_default(i, "ckweight", get_with_default(i, "yjweight", 0))] for i in dahuo_data
+                    [
+                        i["operNo"],
+                        get_with_default(
+                            i, "ckweight", get_with_default(i, "yjweight", 0)
+                        ),
+                    ]
+                    for i in dahuo_data
                 ]
 
                 # 重量差N-D
@@ -364,7 +373,13 @@ def execute(file_path):
                 # 获取所有需要分摊的A#
                 fix_data["need_fentan_A#"] = ",".join([i["operNo"] for i in dahuo_data])
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operNo"], get_with_default(i, "ckweight", get_with_default(i, "yjweight", 0))] for i in dahuo_data
+                    [
+                        i["operNo"],
+                        get_with_default(
+                            i, "ckweight", get_with_default(i, "yjweight", 0)
+                        ),
+                    ]
+                    for i in dahuo_data
                 ]
 
                 # 重量差N-D
@@ -403,7 +418,13 @@ def execute(file_path):
                 # 获取所有需要分摊的A#
                 fix_data["need_fentan_A#"] = ",".join([i["operNo"] for i in dahuo_data])
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operNo"], get_with_default(i, "ckweight", get_with_default(i, "yjweight", 0))] for i in dahuo_data
+                    [
+                        i["operNo"],
+                        get_with_default(
+                            i, "ckweight", get_with_default(i, "yjweight", 0)
+                        ),
+                    ]
+                    for i in dahuo_data
                 ]
 
                 # 重量差N-D
@@ -423,20 +444,24 @@ def execute(file_path):
                     if i_billno == bill_no:
                         i_work_nums = i.split("_")[0][1]
                         already_process_worknums.extend(",".join(i_work_nums))
-                all_kilogram_dahuo = sum(
-                    [
-                        get_with_default(i, "ckweight", get_with_default(i, "yjweight", 0))
-                        for i in dahuo_data
-                        if i["CustomsDeclaration"] == "无单证"
-                        and i["operNo"] not in already_process_worknums
-                    ]
-                )
+                all_kilogram_dahuo = sum([
+                    get_with_default(i, "ckweight", get_with_default(i, "yjweight", 0))
+                    for i in dahuo_data
+                    if i["CustomsDeclaration"] == "无单证"
+                    and i["operNo"] not in already_process_worknums
+                ])
                 fix_data["all_kg"] = all_kilogram_dahuo
 
                 # 获取所有需要分摊的A#
                 fix_data["need_fentan_A#"] = ",".join([i["operNo"] for i in dahuo_data])
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operNo"], get_with_default(i, "ckweight", get_with_default(i, "yjweight", 0))] for i in dahuo_data
+                    [
+                        i["operNo"],
+                        get_with_default(
+                            i, "ckweight", get_with_default(i, "yjweight", 0)
+                        ),
+                    ]
+                    for i in dahuo_data
                 ]
 
                 # 重量差N-D
@@ -476,7 +501,9 @@ def execute(file_path):
                     i[0],
                     "GZHJ-广州航捷",
                     "OCLR-起运港出口报关费",
-                    round(total_price / all_kg_actually * float(i[1]), 2) if all_kg_actually != 0 else 0,
+                    round(total_price / all_kg_actually * float(i[1]), 2)
+                    if all_kg_actually != 0
+                    else 0,
                     "",
                     1,
                     "RMB",
@@ -535,7 +562,7 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
             if not row["提单号"]:
                 continue
             origin_billno = str(row["提单号"])
-            work_nums = re.findall(r'[AS]\d{6}', origin_billno)
+            work_nums = re.findall(r"[AS]\d{6}", origin_billno)
             for wn in work_nums:
                 dt = extract_date_from_worknum(wn)
                 if dt:
@@ -545,14 +572,18 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
             max_date = max(all_dates)
             # 扩展日期范围以确保覆盖完整月份
             start_date = (min_date - relativedelta(days=15)).strftime("%Y-%m-%d")
-            end_date = (max_date + relativedelta(months=1)).strftime("%Y-%m-%d")
+            end_date = datetime.now().strftime("%Y-%m-%d")
         else:
             # 默认最近6个月
             end_date = datetime.now().strftime("%Y-%m-%d")
             start_date = (datetime.now() - relativedelta(months=6)).strftime("%Y-%m-%d")
 
-    zongdan_json_data = hubs_client.get_zginfo_list(start_date=start_date, end_date=end_date)
-    dahuo_all_data = hubs_client.get_bigwaybill_orders_list(start_date=start_date, end_date=end_date,pagesize=5000)
+    zongdan_json_data = hubs_client.get_zginfo_list(
+        start_date=start_date, end_date=end_date
+    )
+    dahuo_all_data = hubs_client.get_bigwaybill_orders_list(
+        start_date=start_date, end_date=end_date, pagesize=5000
+    )
 
     all_fix_data = []
     for index, row in sample_sheet.iterrows():
@@ -631,8 +662,7 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
             if "A2" in origin_billno:
                 # 获取报关方式 - Hubs 使用 bg_mode
                 CustomsDeclaration = {
-                    ("买单" if i["bg_mode"] == "无单证" else "单证")
-                    for i in dahuo_data
+                    ("买单" if i["bg_mode"] == "无单证" else "单证") for i in dahuo_data
                 }
 
                 fix_data["custom_type"] = ",".join(list(CustomsDeclaration))
@@ -641,7 +671,10 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
                     # 默认就是True
                     fix_data["custom_type_right"] = False
                 # 获取大货单号的总KG - Hubs 使用 cost_kg 和 yj_kg
-                all_kilogram_dahuo = sum(get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0)) for i in dahuo_data)
+                all_kilogram_dahuo = sum(
+                    get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0))
+                    for i in dahuo_data
+                )
                 fix_data["dahuo_no_kg"] = all_kilogram_dahuo
                 # 大货号总kg和execl中总kg之差
                 weight_diff = all_kilogram_dahuo - all_kilogram
@@ -667,7 +700,11 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
                 fix_data["need_fentan_A#"] = dahuo_data_bill_no
                 #
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operno"], get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0))] for i in dahuo_data
+                    [
+                        i["operno"],
+                        get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0)),
+                    ]
+                    for i in dahuo_data
                 ]
 
             elif "A2" not in origin_billno and row["类型"] == "买单":
@@ -682,7 +719,11 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
                 # 获取所有需要分摊的A#
                 fix_data["need_fentan_A#"] = ",".join([i["operno"] for i in dahuo_data])
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operno"], get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0))] for i in dahuo_data
+                    [
+                        i["operno"],
+                        get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0)),
+                    ]
+                    for i in dahuo_data
                 ]
 
                 # 重量差N-D
@@ -710,7 +751,11 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
                 # 获取所有需要分摊的A#
                 fix_data["need_fentan_A#"] = ",".join([i["operno"] for i in dahuo_data])
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operno"], get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0))] for i in dahuo_data
+                    [
+                        i["operno"],
+                        get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0)),
+                    ]
+                    for i in dahuo_data
                 ]
 
                 # 重量差N-D
@@ -750,7 +795,11 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
                 # 获取所有需要分摊的A#
                 fix_data["need_fentan_A#"] = ",".join([i["operno"] for i in dahuo_data])
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operno"], get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0))] for i in dahuo_data
+                    [
+                        i["operno"],
+                        get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0)),
+                    ]
+                    for i in dahuo_data
                 ]
 
                 # 重量差N-D
@@ -770,20 +819,22 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
                     if i_billno == bill_no:
                         i_work_nums = i.split("_")[0][1]
                         already_process_worknums.extend(",".join(i_work_nums))
-                all_kilogram_dahuo = sum(
-                    [
-                        get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0))
-                        for i in dahuo_data
-                        if i["bg_mode"] == "无单证"
-                        and i["operno"] not in already_process_worknums
-                    ]
-                )
+                all_kilogram_dahuo = sum([
+                    get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0))
+                    for i in dahuo_data
+                    if i["bg_mode"] == "无单证"
+                    and i["operno"] not in already_process_worknums
+                ])
                 fix_data["all_kg"] = all_kilogram_dahuo
 
                 # 获取所有需要分摊的A#
                 fix_data["need_fentan_A#"] = ",".join([i["operno"] for i in dahuo_data])
                 fix_data["need_fentan_A_dict"] = [
-                    [i["operno"], get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0))] for i in dahuo_data
+                    [
+                        i["operno"],
+                        get_with_default(i, "cost_kg", get_with_default(i, "yj_kg", 0)),
+                    ]
+                    for i in dahuo_data
                 ]
 
                 # 重量差N-D
@@ -823,7 +874,9 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
                     i[0],
                     "GZHJ-广州航捷",
                     "OCLR-起运港出口报关费",
-                    round(total_price / all_kg_actually * float(i[1]), 2) if all_kg_actually != 0 else 0,
+                    round(total_price / all_kg_actually * float(i[1]), 2)
+                    if all_kg_actually != 0
+                    else 0,
                     "",
                     1,
                     "RMB",
@@ -865,6 +918,7 @@ def hangjie_hubs_execute(file_path, start_date=None, end_date=None):
 
 
 if __name__ == "__main__":
-
     # execute(file_path=r"C:\Users\a1337\Downloads\广州航捷-赫泊斯2025年6月账单.xlsx")
-    hangjie_hubs_execute(file_path=r"C:\Users\a1337\Downloads\账单-广州航捷-2601(1).xlsx")
+    hangjie_hubs_execute(
+        file_path=r"C:\Users\a1337\Downloads\账单-广州航捷-2601(1).xlsx"
+    )

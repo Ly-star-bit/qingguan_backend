@@ -1,27 +1,28 @@
 import os
-from pymongo import MongoClient
-from datetime import datetime
+
 from dotenv import load_dotenv
+from pymongo import MongoClient
 
 load_dotenv()
 
 # 本地 MongoDB 连接配置
 LOCAL_MONGO_CONFIG = {
-    'host': '192.168.20.111',
-    'port': 27018,
-    'username': 'luoyu',
-    'password': 'luoyu123456',
-    'database': 'qingguan'  # 替换为本地数据库名
+    "host": "192.168.20.111",
+    "port": 27018,
+    "username": "luoyu",
+    "password": "luoyu123456",
+    "database": "qingguan",  # 替换为本地数据库名
 }
 
 # 线上 MongoDB 连接配置
 REMOTE_MONGO_CONFIG = {
-    'host': os.getenv("MONGO_HOST"),
-    'port': int(os.getenv("MONGO_PORT")), 
-    'username': os.getenv("MONGO_USER"),
-    'password': os.getenv("MONGO_PASS"),
-    'database': os.getenv("MONGO_DB")
+    "host": os.getenv("MONGO_HOST"),
+    "port": int(os.getenv("MONGO_PORT")),
+    "username": os.getenv("MONGO_USER"),
+    "password": os.getenv("MONGO_PASS"),
+    "database": os.getenv("MONGO_DB"),
 }
+
 
 def sync_collections():
     """
@@ -30,50 +31,51 @@ def sync_collections():
     try:
         # 连接本地MongoDB
         local_client = MongoClient(
-            host=LOCAL_MONGO_CONFIG['host'],
-            port=LOCAL_MONGO_CONFIG['port'],
-            username=LOCAL_MONGO_CONFIG['username'],
-            password=LOCAL_MONGO_CONFIG['password']
+            host=LOCAL_MONGO_CONFIG["host"],
+            port=LOCAL_MONGO_CONFIG["port"],
+            username=LOCAL_MONGO_CONFIG["username"],
+            password=LOCAL_MONGO_CONFIG["password"],
         )
-        local_db = local_client[LOCAL_MONGO_CONFIG['database']]
-        
+        local_db = local_client[LOCAL_MONGO_CONFIG["database"]]
+
         # 连接远程MongoDB
         remote_uri = f"mongodb://{REMOTE_MONGO_CONFIG['username']}:{REMOTE_MONGO_CONFIG['password']}@{REMOTE_MONGO_CONFIG['host']}:{REMOTE_MONGO_CONFIG['port']}"
         remote_client = MongoClient(remote_uri)
-        remote_db = remote_client[REMOTE_MONGO_CONFIG['database']]
-        
+        remote_db = remote_client[REMOTE_MONGO_CONFIG["database"]]
+
         # 获取本地数据库中的所有集合
         collections = local_db.list_collection_names()
-        
+
         for collection_name in collections:
             print(f"开始同步集合: {collection_name}")
-            
+
             # 获取本地集合中的所有文档
             local_collection = local_db[collection_name]
             documents = list(local_collection.find())
             doc_count = len(documents)
-            
+
             # 获取远程集合
             remote_collection = remote_db[collection_name]
-            
+
             # 清空远程集合中的现有数据
             remote_collection.delete_many({})
-            
+
             # 批量插入文档到远程集合
             if doc_count > 0:
                 remote_collection.insert_many(documents)
-                
+
             print(f"集合 {collection_name} 同步完成，同步文档数: {doc_count}")
-            
+
         print("所有集合同步完成")
-        
+
     except Exception as e:
         print(f"同步过程中发生错误: {str(e)}")
-        
+
     finally:
         # 关闭数据库连接
         local_client.close()
         remote_client.close()
+
 
 def sync_collections_from_remote():
     """
@@ -83,16 +85,16 @@ def sync_collections_from_remote():
         # 连接远程MongoDB
         remote_uri = f"mongodb://{REMOTE_MONGO_CONFIG['username']}:{REMOTE_MONGO_CONFIG['password']}@{REMOTE_MONGO_CONFIG['host']}:{REMOTE_MONGO_CONFIG['port']}"
         remote_client = MongoClient(remote_uri)
-        remote_db = remote_client[REMOTE_MONGO_CONFIG['database']]
+        remote_db = remote_client[REMOTE_MONGO_CONFIG["database"]]
 
         # 连接本地MongoDB
         local_client = MongoClient(
-            host=LOCAL_MONGO_CONFIG['host'],
-            port=LOCAL_MONGO_CONFIG['port'],
-            username=LOCAL_MONGO_CONFIG['username'],
-            password=LOCAL_MONGO_CONFIG['password']
+            host=LOCAL_MONGO_CONFIG["host"],
+            port=LOCAL_MONGO_CONFIG["port"],
+            username=LOCAL_MONGO_CONFIG["username"],
+            password=LOCAL_MONGO_CONFIG["password"],
         )
-        local_db = local_client[LOCAL_MONGO_CONFIG['database']]
+        local_db = local_client[LOCAL_MONGO_CONFIG["database"]]
 
         # 获取远程数据库中的所有集合
         collections = remote_db.list_collection_names()
@@ -137,19 +139,19 @@ def sync_products_to_local_new():
         # 连接远程MongoDB
         remote_uri = f"mongodb://{REMOTE_MONGO_CONFIG['username']}:{REMOTE_MONGO_CONFIG['password']}@{REMOTE_MONGO_CONFIG['host']}:{REMOTE_MONGO_CONFIG['port']}"
         remote_client = MongoClient(remote_uri)
-        remote_db = remote_client[REMOTE_MONGO_CONFIG['database']]
+        remote_db = remote_client[REMOTE_MONGO_CONFIG["database"]]
 
         # 连接本地MongoDB
         local_client = MongoClient(
-            host=LOCAL_MONGO_CONFIG['host'],
-            port=LOCAL_MONGO_CONFIG['port'],
-            username=LOCAL_MONGO_CONFIG['username'],
-            password=LOCAL_MONGO_CONFIG['password']
+            host=LOCAL_MONGO_CONFIG["host"],
+            port=LOCAL_MONGO_CONFIG["port"],
+            username=LOCAL_MONGO_CONFIG["username"],
+            password=LOCAL_MONGO_CONFIG["password"],
         )
-        local_db = local_client[LOCAL_MONGO_CONFIG['database']]
+        local_db = local_client[LOCAL_MONGO_CONFIG["database"]]
 
         # 需要同步的集合列表
-        collections_to_sync = ['products', 'products_sea']
+        collections_to_sync = ["products", "products_sea"]
 
         for collection_name in collections_to_sync:
             print(f"开始从远程同步集合: {collection_name}")
@@ -175,9 +177,13 @@ def sync_products_to_local_new():
             if doc_count > 0:
                 local_new_collection.insert_many(documents)
 
-            print(f"集合 {collection_name} 同步完成，同步到 {new_collection_name}，文档数: {doc_count}")
+            print(
+                f"集合 {collection_name} 同步完成，同步到 {new_collection_name}，文档数: {doc_count}"
+            )
 
-        print("products和products_sea集合同步完成，保存为products_new和products_sea_new")
+        print(
+            "products和products_sea集合同步完成，保存为products_new和products_sea_new"
+        )
 
     except Exception as e:
         print(f"同步过程中发生错误: {str(e)}")
@@ -196,15 +202,15 @@ def update_new_collections_with_route():
     try:
         # 连接本地MongoDB
         local_client = MongoClient(
-            host=LOCAL_MONGO_CONFIG['host'],
-            port=LOCAL_MONGO_CONFIG['port'],
-            username=LOCAL_MONGO_CONFIG['username'],
-            password=LOCAL_MONGO_CONFIG['password']
+            host=LOCAL_MONGO_CONFIG["host"],
+            port=LOCAL_MONGO_CONFIG["port"],
+            username=LOCAL_MONGO_CONFIG["username"],
+            password=LOCAL_MONGO_CONFIG["password"],
         )
-        local_db = local_client[LOCAL_MONGO_CONFIG['database']]
+        local_db = local_client[LOCAL_MONGO_CONFIG["database"]]
 
         # 需要更新的集合列表
-        collections_to_update = ['products_new', 'products_sea_new']
+        collections_to_update = ["products_new", "products_sea_new"]
 
         for collection_name in collections_to_update:
             print(f"开始更新集合: {collection_name}")
@@ -223,31 +229,26 @@ def update_new_collections_with_route():
 
             for doc in documents:
                 # 获取country字段值
-                country = doc.get('country', '')
+                country = doc.get("country", "")
 
                 # 根据country设置startland和destination
-                if country == 'China' or country == 'Vietnam':
+                if country == "China" or country == "Vietnam":
                     # China或Vietnam：startland为China，destination为America
                     startland = country
-                    destination = 'America'
-                elif country == 'Australia' or country == 'Canada':
+                    destination = "America"
+                elif country == "Australia" or country == "Canada":
                     # Australia或Canada：startland为China，destination为对应国家
-                    startland = 'China'
+                    startland = "China"
                     destination = country
                 else:
                     # 其他情况：startland为China，destination为America
-                    startland = 'China'
-                    destination = 'America'
+                    startland = "China"
+                    destination = "America"
 
                 # 更新文档，添加startland和destination字段
                 collection.update_one(
-                    {'_id': doc['_id']},
-                    {
-                        '$set': {
-                            'startland': startland,
-                            'destination': destination
-                        }
-                    }
+                    {"_id": doc["_id"]},
+                    {"$set": {"startland": startland, "destination": destination}},
                 )
                 updated_count += 1
 
@@ -272,51 +273,50 @@ def sync_users_password_from_remote():
         # 连接远程MongoDB
         remote_uri = f"mongodb://{REMOTE_MONGO_CONFIG['username']}:{REMOTE_MONGO_CONFIG['password']}@{REMOTE_MONGO_CONFIG['host']}:{REMOTE_MONGO_CONFIG['port']}"
         remote_client = MongoClient(remote_uri)
-        remote_db = remote_client[REMOTE_MONGO_CONFIG['database']]
+        remote_db = remote_client[REMOTE_MONGO_CONFIG["database"]]
 
         # 连接本地MongoDB
         local_client = MongoClient(
-            host=LOCAL_MONGO_CONFIG['host'],
-            port=LOCAL_MONGO_CONFIG['port'],
-            username=LOCAL_MONGO_CONFIG['username'],
-            password=LOCAL_MONGO_CONFIG['password']
+            host=LOCAL_MONGO_CONFIG["host"],
+            port=LOCAL_MONGO_CONFIG["port"],
+            username=LOCAL_MONGO_CONFIG["username"],
+            password=LOCAL_MONGO_CONFIG["password"],
         )
-        local_db = local_client[LOCAL_MONGO_CONFIG['database']]
+        local_db = local_client[LOCAL_MONGO_CONFIG["database"]]
 
         # 检查远程users集合是否存在
-        if 'users' not in remote_db.list_collection_names():
+        if "users" not in remote_db.list_collection_names():
             print("警告: 远程users集合不存在，跳过同步")
             return
 
         print("开始从远程同步users集合密码")
 
         # 获取远程users集合中的所有用户
-        remote_users_collection = remote_db['users']
+        remote_users_collection = remote_db["users"]
         remote_users = list(remote_users_collection.find())
 
         # 获取本地users集合
-        local_users_collection = local_db['users']
+        local_users_collection = local_db["users"]
 
         updated_count = 0
         not_found_count = 0
 
         for remote_user in remote_users:
             # 获取远程用户的username和password
-            username = remote_user.get('username')
-            password = remote_user.get('password')
+            username = remote_user.get("username")
+            password = remote_user.get("password")
 
             if not username or not password:
                 print("警告: 远程用户缺少username或password字段，跳过")
                 continue
 
             # 在本地users集合中查找相同username的用户
-            local_user = local_users_collection.find_one({'username': username})
+            local_user = local_users_collection.find_one({"username": username})
 
             if local_user:
                 # 更新本地用户的密码
                 local_users_collection.update_one(
-                    {'username': username},
-                    {'$set': {'password': password}}
+                    {"username": username}, {"$set": {"password": password}}
                 )
                 updated_count += 1
                 print(f"已更新用户 {username} 的密码")
@@ -344,23 +344,25 @@ def copy_local_to_remote_new_database():
     try:
         # 连接本地MongoDB
         local_client = MongoClient(
-            host=LOCAL_MONGO_CONFIG['host'],
-            port=LOCAL_MONGO_CONFIG['port'],
-            username=LOCAL_MONGO_CONFIG['username'],
-            password=LOCAL_MONGO_CONFIG['password']
+            host=LOCAL_MONGO_CONFIG["host"],
+            port=LOCAL_MONGO_CONFIG["port"],
+            username=LOCAL_MONGO_CONFIG["username"],
+            password=LOCAL_MONGO_CONFIG["password"],
         )
-        local_db = local_client[LOCAL_MONGO_CONFIG['database']]
+        local_db = local_client[LOCAL_MONGO_CONFIG["database"]]
 
         # 创建新的远程数据库配置
         new_remote_config = REMOTE_MONGO_CONFIG.copy()
-        new_remote_config['database'] = 'qingguan2-latest'
+        new_remote_config["database"] = "qingguan2-latest"
 
         # 连接远程MongoDB到新数据库
         remote_uri = f"mongodb://{new_remote_config['username']}:{new_remote_config['password']}@{new_remote_config['host']}:{new_remote_config['port']}"
         remote_client = MongoClient(remote_uri)
-        remote_db = remote_client[new_remote_config['database']]
+        remote_db = remote_client[new_remote_config["database"]]
 
-        print(f"开始将本地数据库 {LOCAL_MONGO_CONFIG['database']} 复制到远程数据库 {new_remote_config['database']}")
+        print(
+            f"开始将本地数据库 {LOCAL_MONGO_CONFIG['database']} 复制到远程数据库 {new_remote_config['database']}"
+        )
 
         # 获取本地数据库中的所有集合
         collections = local_db.list_collection_names()
@@ -414,24 +416,26 @@ def copy_remote_collections_between_databases():
         # 连接主远程数据库 (qingguan)
         main_remote_uri = f"mongodb://{REMOTE_MONGO_CONFIG['username']}:{REMOTE_MONGO_CONFIG['password']}@{REMOTE_MONGO_CONFIG['host']}:{REMOTE_MONGO_CONFIG['port']}"
         main_remote_client = MongoClient(main_remote_uri)
-        main_remote_db = main_remote_client[REMOTE_MONGO_CONFIG['database']]
+        main_remote_db = main_remote_client[REMOTE_MONGO_CONFIG["database"]]
 
         # 创建目标远程数据库配置 (qingguan2-latest)
         target_remote_config = REMOTE_MONGO_CONFIG.copy()
-        target_remote_config['database'] = 'qingguan2-latest'
+        target_remote_config["database"] = "qingguan2-latest"
 
         # 连接目标远程数据库 (qingguan2-latest)
         target_remote_uri = f"mongodb://{target_remote_config['username']}:{target_remote_config['password']}@{target_remote_config['host']}:{target_remote_config['port']}"
         target_remote_client = MongoClient(target_remote_uri)
-        target_remote_db = target_remote_client[target_remote_config['database']]
+        target_remote_db = target_remote_client[target_remote_config["database"]]
 
         # 需要复制的集合列表
         collections_to_copy = [
-            'custom_clear_history_original_summary',
-            'custom_clear_history_summary'
+            "custom_clear_history_original_summary",
+            "custom_clear_history_summary",
         ]
 
-        print(f"开始从远程数据库 {REMOTE_MONGO_CONFIG['database']} 复制集合到远程数据库 {target_remote_config['database']}")
+        print(
+            f"开始从远程数据库 {REMOTE_MONGO_CONFIG['database']} 复制集合到远程数据库 {target_remote_config['database']}"
+        )
 
         total_docs_copied = 0
 
@@ -474,6 +478,7 @@ def copy_remote_collections_between_databases():
         main_remote_client.close()
         target_remote_client.close()
 
+
 def backup_and_update_products_price():
     """
     备份products集合到products_old，并将每个文档的'单价'字段乘以1.1
@@ -483,15 +488,15 @@ def backup_and_update_products_price():
         # 连接远程MongoDB
         remote_uri = f"mongodb://{REMOTE_MONGO_CONFIG['username']}:{REMOTE_MONGO_CONFIG['password']}@{REMOTE_MONGO_CONFIG['host']}:{REMOTE_MONGO_CONFIG['port']}"
         remote_client = MongoClient(remote_uri)
-        remote_db = remote_client[REMOTE_MONGO_CONFIG['database']]
+        remote_db = remote_client[REMOTE_MONGO_CONFIG["database"]]
 
-        products_collection = remote_db['products']
-        products_old_collection = remote_db['products_old']
+        products_collection = remote_db["products"]
+        products_old_collection = remote_db["products_old"]
 
         # 读取所有文档
         documents = list(products_collection.find())
         doc_count = len(documents)
-        
+
         print(f"读取到 {doc_count} 条products文档")
 
         # 备份到products_old（先清空再插入）
@@ -503,14 +508,13 @@ def backup_and_update_products_price():
         # 更新单价字段 * 1.1
         updated_count = 0
         for doc in documents:
-            单价 = doc.get('单价')
+            单价 = doc.get("单价")
             if 单价 is not None:
                 try:
                     # 尝试转换为浮点数并乘以1.1
                     new_price = float(单价) * 1.1
                     products_collection.update_one(
-                        {'_id': doc['_id']},
-                        {'$set': {'单价': str(new_price)}}
+                        {"_id": doc["_id"]}, {"$set": {"单价": str(new_price)}}
                     )
                     updated_count += 1
                 except (ValueError, TypeError) as e:
@@ -535,28 +539,27 @@ def restore_products_price():
         # 连接远程MongoDB
         remote_uri = f"mongodb://{REMOTE_MONGO_CONFIG['username']}:{REMOTE_MONGO_CONFIG['password']}@{REMOTE_MONGO_CONFIG['host']}:{REMOTE_MONGO_CONFIG['port']}"
         remote_client = MongoClient(remote_uri)
-        remote_db = remote_client[REMOTE_MONGO_CONFIG['database']]
+        remote_db = remote_client[REMOTE_MONGO_CONFIG["database"]]
 
-        products_collection = remote_db['products']
+        products_collection = remote_db["products"]
 
         # 读取所有文档
         documents = list(products_collection.find())
         doc_count = len(documents)
-        
+
         print(f"读取到 {doc_count} 条products文档")
 
         # 恢复单价字段 / 1.1 并四舍五入保留2位小数
         restored_count = 0
         for doc in documents:
-            单价 = doc.get('单价')
+            单价 = doc.get("单价")
             if 单价 is not None:
                 try:
                     # 尝试转换为浮点数并除以1.1，然后四舍五入保留2位小数
                     new_price = round(float(单价) / 1.1, 2)
                     print(f"文档 {doc.get('_id')}: 原单价={单价}, 恢复后={new_price}")
                     products_collection.update_one(
-                        {'_id': doc['_id']},
-                        {'$set': {'单价': str(new_price)}}
+                        {"_id": doc["_id"]}, {"$set": {"单价": str(new_price)}}
                     )
                     restored_count += 1
                     # if restored_count >= 1:
@@ -574,6 +577,82 @@ def restore_products_price():
         remote_client.close()
 
 
+def _filter_hs_codes(raw_values):
+    """
+    过滤HS_CODE原始值：去掉None、空字符串、纯空白，并去除重复。
+
+    Args:
+        raw_values (list): HS_CODE原始值列表，可能包含None、空字符串等
+
+    Returns:
+        list: 过滤并去重后的HS_CODE字符串列表
+    """
+    result = []
+    seen = set()
+    for value in raw_values:
+        if value is None:
+            continue
+        # 统一转字符串并去除首尾空白
+        cleaned = str(value).strip()
+        if not cleaned:
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result
+
+
+def get_products_hs_codes(database="remote"):
+    """
+    获取products集合中所有HS_CODE字段值，过滤掉空值（None、空字符串、纯空白）并去重。
+
+    Args:
+        database (str): 连接的数据库，'remote' 表示线上数据库，'local' 表示本地数据库，默认 'remote'
+
+    Returns:
+        list: 过滤并去重后的HS_CODE字符串列表；发生错误时返回空列表
+    """
+    # 选择数据库配置
+    config = REMOTE_MONGO_CONFIG if database == "remote" else LOCAL_MONGO_CONFIG
+
+    try:
+        # 连接MongoDB，远程使用URI方式，本地使用参数方式
+        if database == "remote":
+            uri = f"mongodb://{config['username']}:{config['password']}@{config['host']}:{config['port']}"
+            client = MongoClient(uri)
+        else:
+            client = MongoClient(
+                host=config["host"],
+                port=config["port"],
+                username=config["username"],
+                password=config["password"],
+            )
+        db = client[config["database"]]
+
+        products_collection = db["products"]
+
+        # 只查询HS_CODE字段，减少网络传输
+        documents = products_collection.find({}, {"HS_CODE": 1})
+        raw_values = [doc.get("HS_CODE") for doc in documents]
+
+        # 过滤空值并去重
+        hs_codes = _filter_hs_codes(raw_values)
+
+        print(
+            f"获取到 {len(raw_values)} 条products文档，过滤后得到 {len(hs_codes)} 个不重复的HS_CODE"
+        )
+        return hs_codes
+
+    except Exception as e:
+        print(f"获取HS_CODE过程中发生错误: {str(e)}")
+        return []
+
+    finally:
+        # 关闭数据库连接
+        client.close()
+
+
 if __name__ == "__main__":
     # 选择要执行的同步函数：
     # sync_collections() - 将本地数据同步到线上
@@ -585,6 +664,10 @@ if __name__ == "__main__":
     # copy_remote_collections_between_databases() - 将qingguan数据库的两个集合复制到qingguan2-latest数据库
     # backup_and_update_products_price() - 备份products到products_old，并将单价*1.1
     # restore_products_price() - 恢复products的单价，将单价/1.1并四舍五入保留2位小数
+    # get_products_hs_codes() - 获取products集合中的HS_CODE字段，过滤空值并去重
 
     # 调用新函数
-    restore_products_price()
+    # restore_products_price()
+    hs_codes = get_products_hs_codes()
+    hs_codes_str = ",".join(hs_codes)
+    print(hs_codes_str)

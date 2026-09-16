@@ -1,6 +1,4 @@
 import base64
-import hashlib
-import hmac
 import json
 import os
 import pickle
@@ -8,14 +6,16 @@ import random
 import time
 from datetime import datetime, timedelta
 
-import cv2
 import httpx
-import numpy as np
 from captcha_recognizer.slider import Slider
+from dotenv import load_dotenv
+from httpx import Response
 from loguru import logger
 from PIL import Image
-from httpx import Response
+
 from .new_molink_decrypt import sm3_decrypt
+
+load_dotenv()
 
 
 class HubsClient:
@@ -34,9 +34,14 @@ class HubsClient:
         if self.username and self.password:
             self.httpx_client = self.login_hubs_get_httpx_client()
             # 只有在登录成功时才执行 switchsys
-            if isinstance(self.httpx_client, dict) and self.httpx_client.get("code") == 400:
+            if (
+                isinstance(self.httpx_client, dict)
+                and self.httpx_client.get("code") == 400
+            ):
                 # 登录失败，抛出异常而不是继续
-                raise Exception(f"登录失败: {self.httpx_client.get('message', '未知错误')}")
+                raise Exception(
+                    f"登录失败: {self.httpx_client.get('message', '未知错误')}"
+                )
             self.switchsys()
         else:
             # Check if we have a valid session locally first
@@ -47,9 +52,14 @@ class HubsClient:
                 # If no valid session, attempt to log in
                 self.httpx_client = self.login_hubs_get_httpx_client()
                 # 只有在登录成功时才执行 switchsys
-                if isinstance(self.httpx_client, dict) and self.httpx_client.get("code") == 400:
+                if (
+                    isinstance(self.httpx_client, dict)
+                    and self.httpx_client.get("code") == 400
+                ):
                     # 登录失败，抛出异常而不是继续
-                    raise Exception(f"登录失败: {self.httpx_client.get('message', '未知错误')}")
+                    raise Exception(
+                        f"登录失败: {self.httpx_client.get('message', '未知错误')}"
+                    )
                 self.switchsys()
 
     def update_token(self, httpx_response_headeres: Response):
@@ -57,12 +67,12 @@ class HubsClient:
             access_token = httpx_response_headeres.get("Access-Token")
             refresh_token = httpx_response_headeres.get("X-Access-Token")
 
-            self.httpx_client.headers.update(
-                {"Authorization": f"Bearer {access_token}"}
-            )
-            self.httpx_client.headers.update(
-                {"X-Authorization": f"Bearer {refresh_token}"}
-            )
+            self.httpx_client.headers.update({
+                "Authorization": f"Bearer {access_token}"
+            })
+            self.httpx_client.headers.update({
+                "X-Authorization": f"Bearer {refresh_token}"
+            })
             self.save_session(access_token, refresh_token)
 
     def check_and_use_local_session(self):
@@ -83,12 +93,12 @@ class HubsClient:
                     if resp.headers.get("Access-Token"):
                         access_token = resp.headers.get("Access-Token")
                         refresh_token = resp.headers.get("X-Access-Token")
-                        client.headers.update(
-                            {"Authorization": f"Bearer {access_token}"}
-                        )
-                        client.headers.update(
-                            {"X-Authorization": f"Bearer {refresh_token}"}
-                        )
+                        client.headers.update({
+                            "Authorization": f"Bearer {access_token}"
+                        })
+                        client.headers.update({
+                            "X-Authorization": f"Bearer {refresh_token}"
+                        })
                         self.save_session(access_token, refresh_token)
 
                     return client
@@ -136,9 +146,9 @@ class HubsClient:
                     }
                     client = httpx.Client(headers=headers)
                     client.headers.update({"Authorization": f"Bearer {access_token}"})
-                    client.headers.update(
-                        {"X-Authorization": f"Bearer {refresh_token}"}
-                    )
+                    client.headers.update({
+                        "X-Authorization": f"Bearer {refresh_token}"
+                    })
                     return client
         return None
 
@@ -298,8 +308,12 @@ class HubsClient:
 
         data = {
             "id": track_id,
-            "loginpwd": sm3_decrypt(os.environ.get("HUBS_PASS", "")) if not self.password else sm3_decrypt(self.password),
-            "loginuser": os.environ.get("HUBS_USER") if not self.username else self.username,
+            "loginpwd": sm3_decrypt(os.environ.get("HUBS_PASS", ""))
+            if not self.password
+            else sm3_decrypt(self.password),
+            "loginuser": os.environ.get("HUBS_USER")
+            if not self.username
+            else self.username,
             "track": track_data,
         }
 
@@ -407,12 +421,10 @@ class HubsClient:
                     logger.info(f"尝试{count}次登陆成功")
                     # Create client with both authorization header and other headers
                     client = httpx.Client(headers=headers)
-                    client.headers.update(
-                        {
-                            "Authorization": f"Bearer {access_token}",
-                            "X-Authorization": f"Bearer {refresh_token}",
-                        }
-                    )  # Add auth header
+                    client.headers.update({
+                        "Authorization": f"Bearer {access_token}",
+                        "X-Authorization": f"Bearer {refresh_token}",
+                    })  # Add auth header
 
                     # Save session for future use
                     if self.username:
@@ -454,12 +466,10 @@ class HubsClient:
             x_access_token = response.headers.get(
                 "X-Access-Token"
             ) or response.headers.get("x-access-token")
-            self.httpx_client.headers.update(
-                {
-                    "Authorization": f"Bearer {access_token}",
-                    "X-Authorization": f"Bearer {x_access_token}",
-                }
-            )
+            self.httpx_client.headers.update({
+                "Authorization": f"Bearer {access_token}",
+                "X-Authorization": f"Bearer {x_access_token}",
+            })
             if self.username:
                 return {
                     "Authorization": f"Bearer {access_token}",
@@ -469,7 +479,7 @@ class HubsClient:
             return self.httpx_client
         elif not data["success"]:
             # logger.warning(f"切换失败,{data['message']}")
-            
+
             return data
 
     def get_customer_channels(
@@ -740,7 +750,7 @@ class HubsClient:
             logger.error(f"Unknown error while getting warehouses: {e}")
             return None
 
-    def get_bigwaybill_order(self, sono_list:list):
+    def get_bigwaybill_order(self, sono_list: list):
         """
         Get 大货运单 from the API
         :param pagesize: Page size (default: 499)
@@ -784,7 +794,7 @@ class HubsClient:
         url = "https://admin.hubs-scs.com/api/v1/oms/oms_bigwaybill_order/newadd"
 
         try:
-            response = self.httpx_client.put(url, json=payload,timeout=60)
+            response = self.httpx_client.put(url, json=payload, timeout=60)
             # response.raise_for_status()
 
             data = response.json()
@@ -830,7 +840,7 @@ class HubsClient:
             "order": original_data["order"],
             "boxgauge_list": original_data.get("boxgauge_list", []),
             "product_list": original_data.get("product_list", []),
-            "goods_type": original_data.get("goods_type", {})
+            "goods_type": original_data.get("goods_type", {}),
         }
 
         # 更新order字段
@@ -981,7 +991,9 @@ class HubsClient:
                 total_count = page_data.get("totalCount", 0)
                 current_count = len(all_results)
 
-                logger.info(f"已获取 {current_count}/{total_count} 条总单数据 (第{current_page}页)")
+                logger.info(
+                    f"已获取 {current_count}/{total_count} 条总单数据 (第{current_page}页)"
+                )
 
                 if current_count >= total_count:
                     break
@@ -989,13 +1001,19 @@ class HubsClient:
                 current_page += 1
 
             except httpx.RequestError as e:
-                logger.error(f"Request error while getting zginfo list (page {current_page}): {e}")
+                logger.error(
+                    f"Request error while getting zginfo list (page {current_page}): {e}"
+                )
                 return None
             except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error while getting zginfo list (page {current_page}): {e}")
+                logger.error(
+                    f"JSON decode error while getting zginfo list (page {current_page}): {e}"
+                )
                 return None
             except Exception as e:
-                logger.error(f"Unknown error while getting zginfo list (page {current_page}): {e}")
+                logger.error(
+                    f"Unknown error while getting zginfo list (page {current_page}): {e}"
+                )
                 return None
 
         logger.info(f"获取完成，共 {len(all_results)} 条总单数据")
@@ -1075,7 +1093,9 @@ class HubsClient:
                 total_count = page_data.get("totalCount", 0)
                 current_count = len(all_orders)
 
-                logger.info(f"已获取 {current_count}/{total_count} 条大货运单数据 (第{current_page}页)")
+                logger.info(
+                    f"已获取 {current_count}/{total_count} 条大货运单数据 (第{current_page}页)"
+                )
 
                 if current_count >= total_count:
                     # 已经获取完所有数据
@@ -1084,17 +1104,25 @@ class HubsClient:
                 current_page += 1
 
             except httpx.RequestError as e:
-                logger.error(f"Request error while getting bigwaybill list (page {current_page}): {e}")
+                logger.error(
+                    f"Request error while getting bigwaybill list (page {current_page}): {e}"
+                )
                 return None
             except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error while getting bigwaybill list (page {current_page}): {e}")
+                logger.error(
+                    f"JSON decode error while getting bigwaybill list (page {current_page}): {e}"
+                )
                 return None
             except Exception as e:
-                logger.error(f"Unknown error while getting bigwaybill list (page {current_page}): {e}")
+                logger.error(
+                    f"Unknown error while getting bigwaybill list (page {current_page}): {e}"
+                )
                 return None
 
         logger.info(f"获取完成，共 {len(all_orders)} 条大货运单数据")
         return all_orders
+
+
 def main():
     # Create a HubsClient instance which will handle login automatically
     client = HubsClient(retry_counts=5)

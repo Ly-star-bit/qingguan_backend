@@ -10,6 +10,19 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import HTTPException
 
+try:
+    # 路由实际匹配的路径：scope["path"] 去掉 root_path（root_path 来自 X-Forwarded-Prefix 请求头）
+    from starlette._utils import get_route_path
+except ImportError:  # 旧版本 Starlette 没有该函数：路由直接按 scope["path"] 匹配
+    def get_route_path(scope) -> str:
+        return scope["path"]
+
+try:
+    # 适配器加载策略时用的分词函数：各字段以 ", " 拼接后再按顶层逗号切分（[] 和 () 内的逗号不切）
+    from casbin.persist.adapter import _extract_tokens
+except ImportError:  # 不同版本的 pycasbin 可能没有这个私有函数
+    _extract_tokens = None
+
 
 # -----------------------------
 # 通用
@@ -30,6 +43,69 @@ def normalize_obj(obj: str) -> str:
     if obj and len(obj) > 1 and not obj.endswith("/"):
         return obj + "/"
     return obj
+
+
+# -----------------------------
+# 策略规则能否被正确加载
+# -----------------------------
+# 规则存库后，适配器加载时会把各字段用 ", " 拼起来再按逗号切开。
+# 字段里有英文逗号、括号或方括号时切出来的字段数就不对，
+# 之后 enforce 遍历到这条规则就会抛 "invalid policy size"，所有非 admin 用户的请求都会失败。
+_UNSAFE_CHARS = ",()[]"
+_DESCRIPTION_REPLACEMENTS = str.maketrans({",": "，", "(": "（", ")": "）", "[": "【", "]": "】"})
+
+
+def _brackets_balanced(value: str) -> bool:
+    """与加载时的分词规则一致：遇到右括号就弹出一层，不区分括号种类"""
+    depth = 0
+    for c in value:
+        if c in "([":
+            depth += 1
+        elif c in ")]":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def validate_name(value: Optional[str], label: str) -> str:
+    """
+    用户名、角色名会写进 Casbin 规则：不能为空、首尾不能有空格、不能含英文逗号；
+    括号必须配对（已有的“财务(华东)”这类名字不受影响）
+    """
+    if not value or value != value.strip():
+        raise HTTPException(status_code=400, detail=f"{label}不能为空，且首尾不能有空格")
+    if "," in value or not _brackets_balanced(value):
+        raise HTTPException(status_code=400, detail=f"{label}不能包含英文逗号或未配对的括号")
+    return value
+
+
+def sanitize_description(desc: Optional[str]) -> str:
+    """
+    描述是自由文本（常取自接口说明），把会破坏规则加载的英文符号换成中文全角符号：
+    英文逗号一律替换；括号配对时保持原样（避免已有描述因此变化），不配对时全部替换
+    """
+    desc = (desc or "").replace(",", "，").strip()
+    if not _brackets_balanced(desc):
+        desc = desc.translate(_DESCRIPTION_REPLACEMENTS)
+    return desc
+
+
+def ensure_rule_loadable(ptype: str, rule: List[str]) -> None:
+    """模拟适配器的加载过程，确认规则重新加载后字段不变；否则拒绝写入"""
+    if _extract_tokens is not None:
+        try:
+            tokens = _extract_tokens(", ".join([ptype, *rule]))
+        except IndexError:  # 右括号多于左括号
+            tokens = None
+        ok = tokens is not None and tokens[1:] == list(rule)
+    else:
+        ok = all(i == 3 or not any(c in str(v) for c in _UNSAFE_CHARS) for i, v in enumerate(rule))
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail=f"规则内容包含无法保存的字符（英文逗号、未配对的括号或首尾空格）: {rule}",
+        )
 
 
 def norm_path(path: Optional[str]) -> str:

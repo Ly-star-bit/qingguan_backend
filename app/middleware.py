@@ -20,6 +20,7 @@ import hmac
 
 from app.api_keys.apis.api_keys import validate_api_key
 from app.db_mongo import enforcer
+from app.permission_core import get_route_path
 from app.system_status import is_system_forbidden
 
 load_dotenv()
@@ -89,8 +90,10 @@ SKUDETAIL_STATIC_TOKEN = os.getenv("SKUDETAIL_STATIC_TOKEN")
 EXCLUDED_PREFIXES = ("/static/", "/tiles", )
 class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # 定义不需要验证的路径
-        path = request.url.path
+        # 必须和路由实际匹配的路径一致：路由会先去掉 root_path（来自 X-Forwarded-Prefix 请求头）再匹配。
+        # 原来用 request.url.path（不去 root_path）：请求 /static/api/users/ 并带上
+        # X-Forwarded-Prefix: /static，这里按 /static/ 前缀放行，路由却执行了 /api/users/，等于绕过登录。
+        path = get_route_path(request.scope) or "/"
         method = request.method
         if len(path) > 1 and not path.endswith('/'):
                 path = path + '/'
@@ -123,7 +126,7 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
         token = auth_header.split(" ")[1]
         if (
             SKUDETAIL_STATIC_TOKEN
-            and "skudetail" in request.url.path
+            and path.startswith("/api/skudetail/")
             and hmac.compare_digest(token.encode(), SKUDETAIL_STATIC_TOKEN.encode())
         ):
             return await call_next(request)
@@ -154,20 +157,6 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
             action = request.method
             logger.debug(f"{subject}-{obj}-{action}")
 
-            if subject != "admin" and path not in AUTH_ONLY_PATHS:
-                if is_system_forbidden():
-                    return JSONResponse(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        content={"detail": "系统已封禁"}
-                    )
-                
-                if not enforcer.enforce(subject, obj, action,{}):
-                    logger.info(f"没有权限: {subject}-{obj}-{action}")
-                    return JSONResponse(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        content={"detail": "没有权限"}
-                    )
-
         except ExpiredSignatureError:
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -184,5 +173,29 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": "无法验证令牌"}
             )
-        
+
+        if subject != "admin" and path not in AUTH_ONLY_PATHS:
+            if is_system_forbidden():
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"detail": "系统已封禁"}
+                )
+
+            try:
+                allowed = enforcer.enforce(subject, obj, action, {})
+            except Exception:
+                # 策略数据有问题（例如某条规则字段数不对）时每个请求都会报错。
+                # 单独返回 500 并打印堆栈，不要伪装成“令牌无效”让前端以为是登录问题。
+                logger.exception(f"Casbin 鉴权异常: {subject}-{obj}-{action}")
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"detail": "权限配置异常，请联系管理员"}
+                )
+            if not allowed:
+                logger.info(f"没有权限: {subject}-{obj}-{action}")
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"detail": "没有权限"}
+                )
+
         return await call_next(request)

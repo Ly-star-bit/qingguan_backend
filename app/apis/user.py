@@ -7,7 +7,8 @@ import jwt
 from openpyxl.descriptors import Bool
 from pymongo import MongoClient
 from app.db_mongo import get_session, enforcer
-from app.permission_core import parse_object_id
+from app.casbin_subjects import ensure_username_available, rename_subject_in_casbin
+from app.permission_core import parse_object_id, validate_name
 from app.system_status import invalidate_system_status_cache
 from pydantic import BaseModel
 from passlib.context import CryptContext
@@ -74,6 +75,9 @@ def login_for_access_token(
         user.password.encode("utf-8"), user_db["password"].encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
+    if user_db.get("status", 1) == 0:
+        # 前端登录页对 403 会直接显示 detail
+        raise HTTPException(status_code=403, detail="账号已被禁用，请联系管理员")
 
     access_token_expires = timedelta(hours=3)
     access_token = create_access_token(
@@ -118,6 +122,9 @@ def refresh_token(
         user_db = session.users.find_one({"username": username})
         if not user_db:
             raise HTTPException(status_code=401, detail="Invalid user")
+        if user_db.get("status", 1) == 0:
+            # 用前端识别的 detail，让它直接跳回登录页
+            raise HTTPException(status_code=401, detail="Refresh token expired")
 
         # 生成新的 access token
         access_token_expires = timedelta(hours=1)
@@ -140,8 +147,10 @@ def refresh_token(
 @user_router.post("/users/", response_model=UserOut, summary="创建新用户")
 def create_user(user: UserCreate, session: MongoClient = Depends(get_session)):
     db = session
+    validate_name(user.username, "用户名")
     if db.users.find_one({"username": user.username}):
         raise HTTPException(status_code=400, detail="Username already exists")
+    ensure_username_available(db, user.username)
 
     hashed_password = bcrypt.hashpw(user.password.encode("utf-8"), bcrypt.gensalt())
     new_user = {"username": user.username, "password": hashed_password.decode("utf-8")}
@@ -160,9 +169,11 @@ def create_user(user: UserCreate, session: MongoClient = Depends(get_session)):
 @user_router.put("/users/{user_id}/", response_model=UserOut, summary="更新指定用户信息")
 def update_user(
     user_id: str,
-    username: str = Form(...),
-    password: str = Form(...),
+    username: Optional[str] = Form(None),
+    # 前端不改密码时不传 password（原来是必填，不改密码保存会直接 422）
+    password: Optional[str] = Form(None),
     old_password: str = Form(...),
+    status: Optional[int] = Form(None),
     session: MongoClient = Depends(get_session),
 ):
     db = session
@@ -177,15 +188,37 @@ def update_user(
     ):
         raise HTTPException(status_code=401, detail="原始密码不正确")
 
+    old_name = user_db["username"]
+    renamed = bool(username) and username != old_name
+    if renamed:
+        # 用户名是 Casbin 的 subject：admin 账号在中间件里直接放行，不允许改名；
+        # 新名字不能和其他用户、角色重名，否则会继承对方的权限
+        if old_name == "admin":
+            raise HTTPException(status_code=400, detail="admin 账号不能改名")
+        validate_name(username, "用户名")
+        if db.users.find_one({"username": username, "_id": {"$ne": user_oid}}, {"_id": 1}):
+            raise HTTPException(status_code=400, detail="Username already exists")
+        ensure_username_available(db, username)
+
+    if status is not None and status not in (0, 1):
+        raise HTTPException(status_code=400, detail="status 只能是 0 或 1")
+    if status == 0 and old_name == "admin":
+        raise HTTPException(status_code=400, detail="admin 账号不能禁用")
+
     update_data = {}
-    if username:
+    if renamed:
         update_data["username"] = username
     if password:
         hashed_password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
         update_data["password"] = hashed_password.decode("utf-8")
+    if status is not None:
+        update_data["status"] = status
 
     if update_data:
         db.users.update_one({"_id": user_oid}, {"$set": update_data})
+    if renamed:
+        # 角色分配和直接授予的规则跟着迁移到新用户名，旧用户名下不留规则
+        rename_subject_in_casbin(old_name, username)
 
     return _user_out(db.users.find_one({"_id": user_oid}))
 
@@ -221,8 +254,8 @@ def read_users(
     for user in cursor:
         user_dict = {
             "id": str(user.get("_id")),
-            "username": user.get("username"), 
-            "status": 1,
+            "username": user.get("username"),
+            "status": user.get("status", 1),
             "last_login": user.get("last_login"),
             "last_ip": user.get("last_ip"),
             # 只返回需要的字段，避免返回 ObjectId 或密码等敏感信息

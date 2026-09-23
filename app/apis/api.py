@@ -7,7 +7,6 @@ from bson import ObjectId
 from app.permission_core import parse_object_id
 from pydantic import BaseModel
 from app.db_mongo import enforcer
-from app.schemas import UpdateUserApiPermissions
 # 定义API端点模型
 class ApiEndpoint(BaseModel):
     id: Optional[str] = None
@@ -209,60 +208,7 @@ async def sync_from_openapi(request: Request, session=Depends(get_session)):
 
     return {"message": f"同步完成，新增 {created_count} 个业务API端点。"}
 
-@api_router.get("/user/get_user_api_permissions", summary="获取用户API权限")
-async def get_user_api_permissions(user_id: str, session = Depends(get_session)):
-    """获取用户API权限"""
-    db = session
-    user = db.users.find_one({"_id": ObjectId(user_id)})
-    
-    # 获取用户在Casbin中的权限
-    user_policies = enforcer.get_filtered_policy(0, user_id)
-    permissions = [f"{policy[1]}:{policy[2]}" for policy in user_policies]  # resource:action format
-    
-    return permissions
 
-
-
-@api_router.put("/user/update_user_api_permissions", summary="更新用户API权限")
-async def update_user_api_permissions(update_user_api_permissions: UpdateUserApiPermissions, session = Depends(get_session)):
-    """更新用户API权限"""
-    db = session
-    user_id = update_user_api_permissions.user_id
-    api_ids = update_user_api_permissions.api_ids
-    db.users.update_one(
-        {"_id": ObjectId(user_id)},
-        {"$set": {"api_ids": api_ids}}
-    )
-    # 获取当前用户的所有策略
-    current_policies = enforcer.get_filtered_policy(0, user_id)
-    
-    # 获取当前用户已有的api_ids
-    current_api_ids = {policy[1] for policy in current_policies}
-    
-    # 需要更新的api_ids集合
-    update_api_ids = set(api_ids)
-    
-    # 需要删除的api_ids
-    for policy in current_policies:
-        if policy[1] not in update_api_ids:
-            enforcer.remove_policy([user_id, policy[1], "access"])
-    
-    # 添加新策略
-    for api_id in update_api_ids - current_api_ids:
-        # 从数据库中获取API端点信息以获取权限码
-        api_endpoint = db.api_endpoints.find_one({"_id": ObjectId(api_id)})
-        if api_endpoint and api_endpoint.get("PermissionCode"):
-            # 使用API端点的PermissionCode作为权限
-            permission_code = api_endpoint["PermissionCode"]
-            # 分割权限码以获取资源和操作
-            parts = permission_code.split(':')
-            if len(parts) == 2:
-                resource, action = parts
-                enforcer.add_policy(user_id, resource, action, "allow")
-        else:
-            # 如果没有权限码，使用api_id作为资源
-            enforcer.add_policy(user_id, api_id, "access", "allow")
-    
-    enforcer.load_policy()
-    
-    return {"message": "更新成功"}
+# 已删除 GET /user/get_user_api_permissions 和 PUT /user/update_user_api_permissions（前端没有调用）：
+# 前者把用户 ID 当作 Casbin subject 查询（实际 subject 是用户名），查不到任何数据；
+# 后者写入只有 4 个字段的 p 规则（模型要求 6 个字段），写入后所有非 admin 用户的鉴权都会报错。

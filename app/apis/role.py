@@ -1,12 +1,13 @@
 import os
 import bcrypt
-from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from typing import List, Optional
 
 import jwt
 from pymongo import MongoClient
 from app.db_mongo import get_session, enforcer
-from app.permission_core import parse_object_id
+from app.casbin_subjects import ensure_role_name_available, rename_subject_in_casbin
+from app.permission_core import parse_object_id, validate_name
 from pydantic import BaseModel
 from passlib.context import CryptContext
 from datetime import datetime
@@ -52,34 +53,16 @@ def _remove_role_from_casbin(role_name: str) -> None:
     enforcer.remove_filtered_grouping_policy(0, role_name)
 
 
-def _rename_role_in_casbin(old_name: str, new_name: str) -> None:
-    """
-    角色改名时同步迁移 Casbin 数据，否则原有策略和已分配的用户都会留在旧角色名下。
-    注意：casbin_pymongo_adapter 没有实现 add_policies / update_filtered_policies，
-    批量接口在 auto_save 下会静默失败（或只改内存），这里只能逐条操作。
-    """
-    for rule in [list(r) for r in enforcer.get_filtered_named_policy("p", 0, old_name)]:
-        enforcer.update_named_policy("p", rule, [new_name, *rule[1:]])
-
-    # 成员关系 g(user, old) 与角色自身的继承关系 g(old, parent)
-    for g in [list(r) for r in enforcer.get_filtered_named_grouping_policy("g", 1, old_name)]:
-        enforcer.remove_named_grouping_policy("g", g)
-        enforcer.add_named_grouping_policy("g", [g[0], new_name, *g[2:]])
-    for g in [list(r) for r in enforcer.get_filtered_named_grouping_policy("g", 0, old_name)]:
-        enforcer.remove_named_grouping_policy("g", g)
-        enforcer.add_named_grouping_policy("g", [new_name, *g[1:]])
-
-    enforcer.load_policy()
-
-
 @role_router.post("/roles/", response_model=Role, summary="创建新角色")
 def create_role(role: RoleCreate, session: MongoClient = Depends(get_session)):
     """
     创建新角色
     """
     db = session
+    validate_name(role.role_name, "角色名")
     if db.roles.find_one({"role_name": role.role_name}):
         raise HTTPException(status_code=400, detail="Role name already exists")
+    ensure_role_name_available(db, role.role_name)
 
     new_role = {
         "role_name": role.role_name,
@@ -163,8 +146,11 @@ def update_role(
 
     old_name = existing_role.get("role_name")
     renamed = role_update.role_name is not None and role_update.role_name != old_name
-    if renamed and db.roles.find_one({"role_name": role_update.role_name, "_id": {"$ne": role_oid}}):
-        raise HTTPException(status_code=400, detail="Role name already exists")
+    if renamed:
+        validate_name(role_update.role_name, "角色名")
+        if db.roles.find_one({"role_name": role_update.role_name, "_id": {"$ne": role_oid}}):
+            raise HTTPException(status_code=400, detail="Role name already exists")
+        ensure_role_name_available(db, role_update.role_name)
 
     # 准备更新数据
     update_data = {}
@@ -188,7 +174,7 @@ def update_role(
         raise HTTPException(status_code=404, detail="Role not found")
 
     if renamed and old_name:
-        _rename_role_in_casbin(old_name, role_update.role_name)
+        rename_subject_in_casbin(old_name, role_update.role_name)
 
     # 返回更新后的角色信息
     updated_role = db.roles.find_one({"_id": role_oid})
@@ -220,56 +206,6 @@ def delete_role(role_id: str, session: MongoClient = Depends(get_session)):
     return {"message": "Role deleted successfully"}
 
 
-@role_router.post("/roles/{role_id}/assign-permissions/", summary="为角色分配权限")
-def assign_permissions_to_role(
-    role_id: str,
-    permissions: List[str] = Body(..., description="权限列表，格式为 'object:action'"),
-    session: MongoClient = Depends(get_session),
-):
-    """
-    为角色分配权限
-    """
-    db = session
-    role_oid = parse_object_id(role_id, "角色ID")
-    role = db.roles.find_one({"_id": role_oid})
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-
-    # 更新角色的权限列表
-    result = db.roles.update_one(
-        {"_id": role_oid},
-        {
-            "$set": {
-                "permissions": permissions,
-                "updated_at": datetime.now()
-            }
-        }
-    )
-
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Role not found")
-
-    # 清除该角色之前的所有策略
-    # 获取所有包含该角色名的策略并删除
-    all_policies = enforcer.get_policy()
-    for policy in all_policies:
-        if policy[0] == role["role_name"]:  # role_name is in subject position
-            enforcer.remove_policy(policy[0], policy[1], policy[2])
-
-    # 根据需要更新Casbin策略
-    # 这里需要根据具体权限格式解析并添加到Casbin中
-    for perm in permissions:
-        if ':' in perm:
-            obj, act = perm.split(':', 1)
-            # 以角色名作为用户，添加策略
-            if not enforcer.has_policy(role["role_name"], obj, act):
-                enforcer.add_policy(role["role_name"], obj, act)
-    
-    enforcer.load_policy()
-
-    return {"message": "Permissions assigned to role successfully", "permissions": permissions}
-
-
 @role_router.get("/roles/{role_id}/permissions/", summary="获取角色权限")
 def get_role_permissions(role_id: str, session: MongoClient = Depends(get_session)):
     """
@@ -284,61 +220,8 @@ def get_role_permissions(role_id: str, session: MongoClient = Depends(get_sessio
     return {"permissions": role.get("permissions", [])}
 
 
-@role_router.post("/roles/{role_id}/assign-to-user/", summary="将角色分配给用户")
-def assign_role_to_user(
-    role_id: str,
-    username: str = Body(..., description="用户名"),
-    session: MongoClient = Depends(get_session),
-):
-    """
-    将角色分配给用户，实际上是将角色的权限赋予用户
-    """
-    db = session
-    role_oid = parse_object_id(role_id, "角色ID")
-    role = db.roles.find_one({"_id": role_oid})
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-
-    user = db.users.find_one({"username": username})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # 获取角色的权限
-    role_permissions = role.get("permissions", [])
-
-    # 为用户添加角色拥有的所有权限
-    for perm in role_permissions:
-        if ':' in perm:
-            obj, act = perm.split(':', 1)
-            # 检查是否已存在该策略
-            if not enforcer.has_policy(username, obj, act):
-                enforcer.add_policy(username, obj, act)
-
-    enforcer.load_policy()
-
-    return {"message": f"Role {role['role_name']} assigned to user {username} successfully", "permissions_added": role_permissions}
-
-
-@role_router.post("/roles/create-admin-role/", summary="创建默认管理员角色")
-def create_admin_role(session: MongoClient = Depends(get_session)):
-    """
-    创建默认管理员角色，拥有所有权限
-    """
-    db = session
-    # 检查是否已存在管理员角色
-    if db.roles.find_one({"role_name": "admin"}):
-        raise HTTPException(status_code=400, detail="Admin role already exists")
-
-    # 创建管理员角色，拥有所有权限
-    admin_role = {
-        "role_name": "admin",
-        "description": "系统管理员角色，拥有所有权限",
-        "permissions": ["*:*"],  # 所有对象的所有操作
-        "status": 1,
-        "created_at": datetime.now(),
-        "updated_at": datetime.now(),
-    }
-    result = db.roles.insert_one(admin_role)
-    admin_role["id"] = str(result.inserted_id)
-
-    return {"message": "Admin role created successfully", "role": admin_role}
+# 已删除三个旧接口（前端没有调用）：
+# - assign-permissions / assign-to-user：写入只有 3 个字段的 p 规则（模型要求 6 个字段），
+#   写入后 enforce 遍历到这条规则就抛 "invalid policy size"，所有非 admin 用户的请求都会失败；
+# - create-admin-role：只在 roles 集合里建一条 "*:*" 的记录，不写 Casbin 规则，没有实际效果。
+# 角色的接口权限和用户的角色分配统一通过 /casbin/policies/groups 维护。

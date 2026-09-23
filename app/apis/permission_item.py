@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import Dict, List, Optional
+from app.auth_utils import ensure_self_or_admin
 from app.db_mongo import get_session, enforcer
 from pydantic import BaseModel
 
@@ -155,10 +156,12 @@ async def create_permission_item(permission_item: CreatePermissionItem, session 
 @permission_item_router.post("/permission_item/check_permission", summary="检查当前用户是否有指定权限")
 async def check_user_permission(
     username: str,
+    request: Request,
     permission_name: Optional[str] = None,
     session = Depends(get_session)
 ):
-    """检查用户是否有指定权限"""
+    """检查用户是否有指定权限（只能查自己，admin 除外）"""
+    ensure_self_or_admin(request, username)
     db = session
 
     # 获取用户信息
@@ -247,8 +250,12 @@ async def get_user_menu_permissions(username: str, menu_id: str, session = Depen
 
 
 @permission_item_router.get("/permission_item/qingguan_file/user/{username}", response_model=List[Dict], summary="获取指定用户在固定菜单下的权限项（特殊处理）")
-async def get_user_menu_permissions_fixed(username: str, session = Depends(get_session)):
-    """获取指定用户在固定菜单下的权限项，按特殊规则处理返回数据"""
+async def get_user_menu_permissions_fixed(username: str, request: Request, session = Depends(get_session)):
+    """
+    获取指定用户在固定菜单下的权限项，按特殊规则处理返回数据。
+    清关文件页面给所有业务用户用，只能查自己（admin 除外），否则能看到别人的航线权限。
+    """
+    ensure_self_or_admin(request, username)
     db = session
     menu_id = QINGGUAN_FILE_MENU_ID
     all_country = QINGGUAN_ALL_COUNTRY

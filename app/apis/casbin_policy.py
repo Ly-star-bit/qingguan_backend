@@ -5,8 +5,16 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from app.db_mongo import enforcer, filter_service  # 确保已注册 satisfies 函数
 
-from app.auth_utils import ensure_self_or_admin, is_admin_user
-from app.permission_core import dump_attrs, load_attrs, normalize_obj, policy_row_to_dict
+from app.auth_utils import is_admin_user
+from app.permission_core import (
+    dump_attrs,
+    ensure_rule_loadable,
+    load_attrs,
+    normalize_obj,
+    policy_row_to_dict,
+    sanitize_description,
+    validate_name,
+)
 from app.schemas import Policy, UpdatePolicy, Group, GroupWithPolicies
 import json
 
@@ -78,7 +86,8 @@ async def get_policies(policy_type: Optional[str] = Query(None, description="p �
 @policy_router.post("/policies")
 async def add_policy(policy: Policy):
     """添加 p 策略（含 attrs JSON）"""
-    rule = [policy.sub, normalize_obj(policy.obj), policy.act, dump_attrs(policy.attrs), policy.eft, policy.description or ""]
+    rule = [policy.sub, normalize_obj(policy.obj), policy.act, dump_attrs(policy.attrs), policy.eft, sanitize_description(policy.description)]
+    ensure_rule_loadable(policy.ptype, rule)
     success = enforcer.add_named_policy(policy.ptype, rule)
     if not success:
         raise HTTPException(status_code=400, detail="策略已存在或无法添加")
@@ -104,6 +113,12 @@ async def update_policies(update_policies: List[UpdatePolicy]):
     if not update_policies:
         raise HTTPException(status_code=400, detail="更新策略列表不能为空")
 
+    for up in update_policies:
+        ensure_rule_loadable(up.new_ptype, [
+            up.new_sub, normalize_obj(up.new_obj), up.new_act,
+            dump_attrs(up.new_attrs), up.new_eft, sanitize_description(up.new_description)
+        ])
+
     rollback_log = []
     try:
         for i, up in enumerate(update_policies):
@@ -114,7 +129,7 @@ async def update_policies(update_policies: List[UpdatePolicy]):
             # 新规则与添加时保持一致：obj 统一补 /
             new_rule = [
                 up.new_sub, normalize_obj(up.new_obj), up.new_act,
-                dump_attrs(up.new_attrs), up.new_eft, up.new_description or ""
+                dump_attrs(up.new_attrs), up.new_eft, sanitize_description(up.new_description)
             ]
 
             if up.old_ptype != up.new_ptype:
@@ -179,7 +194,12 @@ async def get_user_policies(username: str):
 @policy_router.post("/policies/groups")
 async def add_group(group: Group):
     """添加用户组 g(user, role, desc)"""
-    policy = [group.user, group.group, group.description or f"用户 {group.user} 具有 {group.group} 角色"]
+    validate_name(group.user, "用户名")
+    validate_name(group.group, "角色名")
+    if group.user == group.group:
+        raise HTTPException(status_code=400, detail="用户名和角色名不能相同")
+    policy = [group.user, group.group, sanitize_description(group.description or f"用户 {group.user} 具有 {group.group} 角色")]
+    ensure_rule_loadable("g", policy)
     if enforcer.add_named_grouping_policy("g", policy):
         enforcer.load_policy()
         return {"message": "组添加成功"}
@@ -212,7 +232,7 @@ async def update_group(group_with_policies: GroupWithPolicies):
       2) 「编辑接口」弹窗把所有 attrs 置空：某接口(obj+act)仍被选中、传来的 attrs 为空，
          而原来有带 attrs 的 allow 规则时，沿用原来的规则（不放宽航线限制）。
     """
-    role = group_with_policies.group
+    role = validate_name(group_with_policies.group, "角色名")
     existing = [list(r) for r in enforcer.get_filtered_named_policy("p", 0, role)]
 
     # 原有带 attrs 的 allow 规则，按 (obj, act) 分组
@@ -229,8 +249,9 @@ async def update_group(group_with_policies: GroupWithPolicies):
             policy.act,                      # act
             dump_attrs(policy.attrs),        # attrs JSON
             policy.eft,                      # eft
-            policy.description or ""         # desc
+            sanitize_description(policy.description)  # desc（英文逗号等会让规则加载失败）
         ]
+        ensure_rule_loadable("p", rule)
         key = (rule[1], rule[2])
         if str(policy.eft).lower() == "allow" and not policy.attrs and key in restricted:
             new_rules.extend(restricted[key])
@@ -276,6 +297,56 @@ class FilterPoliciesRequest(BaseModel):
     skip: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=1000)
 
+
+# 字段和操作符白名单：field 会直接成为 MongoDB 查询的键，value 会直接成为查询值，
+# 不限制的话可以传 "$where"、{"$ne": ...} 之类的查询操作符
+_FILTER_FIELDS = {"v0", "v1", "v2", "v3", "v4", "v5"}
+_SELF_OPERATORS = {"eq", "contains", "in"}
+_ADMIN_OPERATORS = _SELF_OPERATORS | {"regex", "gt", "lt"}
+_SCALAR_TYPES = (str, int, float, bool)
+
+
+def _check_filter_request(request: FilterPoliciesRequest, http_request: Request) -> None:
+    """
+    该接口只校验登录不走 Casbin（见 middleware.AUTH_ONLY_PATHS）：
+    - 非 admin 只能查自己：v0 条件必须有且只有一个，并且是 eq 自己的用户名。
+      （原来只检查“第一个 eq 的 v0”，而过滤服务用的是“第一个 v0”，
+       先放一个 contains 别人的 v0、再放一个 eq 自己的 v0，就能查到别人的角色策略）
+    - 所有人：字段、操作符、取值类型都要在白名单内。
+    """
+    user = getattr(http_request.state, "user", None)
+    if user is None:
+        # API Key 调用已由中间件校验并按 scopes 限制，这里视同管理员
+        if not http_request.headers.get("X-API-Key"):
+            raise HTTPException(status_code=401, detail="未提供认证令牌")
+        is_admin = True
+    else:
+        is_admin = is_admin_user(user.get("sub"))
+
+    allowed_operators = _ADMIN_OPERATORS if is_admin else _SELF_OPERATORS
+    for f in request.filters:
+        if f.field not in _FILTER_FIELDS:
+            raise HTTPException(status_code=400, detail=f"不支持的过滤字段: {f.field}")
+        if f.operator not in allowed_operators:
+            raise HTTPException(status_code=400, detail=f"不支持的过滤操作: {f.operator}")
+        if f.operator == "in":
+            valid = isinstance(f.value, list) and all(isinstance(v, _SCALAR_TYPES) for v in f.value)
+        elif f.operator in ("contains", "regex"):
+            valid = isinstance(f.value, str)
+        else:
+            valid = isinstance(f.value, _SCALAR_TYPES)
+        if not valid:
+            raise HTTPException(status_code=400, detail=f"过滤值类型不正确: {f.field}")
+
+    if not is_admin:
+        v0_filters = [f for f in request.filters if f.field == "v0"]
+        if (
+            len(v0_filters) != 1
+            or v0_filters[0].operator != "eq"
+            or str(v0_filters[0].value) != user.get("sub")
+        ):
+            raise HTTPException(status_code=403, detail="没有权限")
+
 @policy_router.post("/policies/filter")
 async def filter_policies_post(request: FilterPoliciesRequest, http_request: Request):
     """
@@ -293,13 +364,7 @@ async def filter_policies_post(request: FilterPoliciesRequest, http_request: Req
     该接口只校验登录不走 Casbin（见 middleware.AUTH_ONLY_PATHS）：
     非 admin 只能按 v0=自己 查询。
     """
-    v0_filter = next((f for f in request.filters if f.field == "v0" and f.operator == "eq"), None)
-    if v0_filter is not None:
-        ensure_self_or_admin(http_request, str(v0_filter.value))
-    else:
-        user = getattr(http_request.state, "user", None)
-        if user is not None and not is_admin_user(user.get("sub")):
-            raise HTTPException(status_code=403, detail="没有权限")
+    _check_filter_request(request, http_request)
 
     try:
         conditions = [FilterCondition(

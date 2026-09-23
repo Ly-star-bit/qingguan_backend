@@ -5,6 +5,8 @@ import secrets
 from datetime import datetime, timedelta
 from typing import List, Optional
 from app.db_mongo import db
+from app.permission_core import get_route_path
+from pymongo import ReturnDocument
 from pydantic import BaseModel
 
 api_key_router = APIRouter(tags=["API密钥管理"],prefix='/api_keys')
@@ -143,7 +145,8 @@ async def validate_api_key(request: Request):
     
     # 检查权限范围 - 现在验证的是 endpoint ID 而不是 method+path
     current_method = request.method
-    current_path = request.url.path
+    # 与路由匹配的路径保持一致（request.url.path 带着 root_path，可被 X-Forwarded-Prefix 请求头篡改）
+    current_path = get_route_path(request.scope) or "/"
     allowed_scopes = api_key.get("scopes", [])
     
     # 检查端点权限：查找匹配的API端点
@@ -158,43 +161,40 @@ async def validate_api_key(request: Request):
         if endpoint_id not in allowed_scopes:
             raise HTTPException(status_code=403, detail="API密钥没有访问此接口的权限")
     
-    # 检查速率限制
+    # 检查速率限制（固定时间窗口）：
+    # 原来比较的是累计调用次数 usage_count，永远不清零，累计超过 rate_limit 后这个密钥就永久 429。
+    # 现在按 rate_limit_window 秒为一个窗口计数，窗口过期后重新计数；usage_count 仍保留为累计次数。
     now = datetime.utcnow()
-    rate_limit = api_key.get("rate_limit", 1000)
-    rate_limit_window = api_key.get("rate_limit_window", 60)  # 默认60秒窗口
-    
-    # 计算窗口的开始时间
-    window_start = now - timedelta(seconds=rate_limit_window)
-    
-    # 检查过去窗口时间内是否超过限制
-    # 我们通过更新和检查当前计数来实现限流
-    db.api_keys.update_one(
-        {"_id": api_key["_id"]},
+    rate_limit = api_key.get("rate_limit") or 1000
+    rate_limit_window = api_key.get("rate_limit_window") or 60
+    audit = {
+        "last_used": now,
+        "last_used_ip": request.client.host if request.client else None,
+        "last_used_endpoint": f"{request.method} {current_path}",
+    }
+
+    # 当前窗口已过期（或从未计数）：开启新窗口，计数置 1
+    updated_api_key = db.api_keys.find_one_and_update(
         {
-            "$inc": {"usage_count": 1},
-            "$set": {"last_used": now}
-        }
+            "_id": api_key["_id"],
+            "$or": [
+                {"window_started_at": {"$exists": False}},
+                {"window_started_at": {"$lte": now - timedelta(seconds=rate_limit_window)}},
+            ],
+        },
+        {"$set": {"window_started_at": now, "window_count": 1, **audit}, "$inc": {"usage_count": 1}},
+        return_document=ReturnDocument.AFTER,
     )
-    
-    # 重新获取API密钥以检查当前使用量
-    updated_api_key = db.api_keys.find_one({"_id": api_key["_id"]})
-    if updated_api_key["usage_count"] > rate_limit:
+    if updated_api_key is None:
+        # 仍在当前窗口内：计数加 1
+        updated_api_key = db.api_keys.find_one_and_update(
+            {"_id": api_key["_id"]},
+            {"$set": audit, "$inc": {"usage_count": 1, "window_count": 1}},
+            return_document=ReturnDocument.AFTER,
+        )
+    if updated_api_key and updated_api_key.get("window_count", 0) > rate_limit:
         raise HTTPException(status_code=429, detail="API调用频率超限")
-    
-    # 记录审计日志
-    client_host = request.client.host
-    current_endpoint = f"{request.method} {request.url.path}"
-    db.api_keys.update_one(
-        {"_id": api_key["_id"]},
-        {
-            "$set": {
-                "last_used": now,
-                "last_used_ip": client_host,
-                "last_used_endpoint": current_endpoint
-            }
-        }
-    )
-    
+
     return api_key
 
 # 添加获取API密钥详情的端点

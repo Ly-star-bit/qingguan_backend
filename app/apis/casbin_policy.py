@@ -219,6 +219,11 @@ def _has_attrs(attrs_json: str) -> bool:
     return bool(load_attrs(attrs_json))
 
 
+def _rule_identity(obj: str, act: str, eft: str, attrs: Optional[dict]) -> tuple:
+    """按前端能看到的内容判断是否同一条规则：obj（补 /）、方法、效果、attrs（前端拿到的是 load_attrs 的结果）"""
+    return (normalize_obj(obj), act, str(eft).lower(), json.dumps(attrs or {}, sort_keys=True, ensure_ascii=False))
+
+
 @policy_router.put("/policies/groups")
 async def update_group(group_with_policies: GroupWithPolicies):
     """
@@ -227,13 +232,20 @@ async def update_group(group_with_policies: GroupWithPolicies):
     - 按差异逐条落库：casbin_pymongo_adapter 没有实现 update_filtered_policies，
       原来的 update_filtered_named_policies 只改了内存，随后 load_policy() 又从库里重新加载，
       结果这个接口一直不生效。
-    - 保护（前端数据的已知问题）：
+    - 保护：
       1) 前端只传 allow 规则，该角色已有的 deny 规则全部保留；
-      2) 「编辑接口」弹窗把所有 attrs 置空：某接口(obj+act)仍被选中、传来的 attrs 为空，
+      2) 传来的规则与已有规则内容相同（obj/方法/效果/attrs 一致）时，原样保留已有规则，
+         不按前端数据重写（前端拿到的 attrs 只是规则里的第一项，重写可能丢掉其余项）；
+      3) 旧版「编辑接口」弹窗会把 attrs 置空：某接口(obj+act)传来的 attrs 为空，
          而原来有带 attrs 的 allow 规则时，沿用原来的规则（不放宽航线限制）。
     """
     role = validate_name(group_with_policies.group, "角色名")
     existing = [list(r) for r in enforcer.get_filtered_named_policy("p", 0, role)]
+
+    same: Dict[tuple, List[List[str]]] = {}
+    for r in existing:
+        if len(r) > 4:
+            same.setdefault(_rule_identity(r[1], r[2], r[4], load_attrs(r[3])), []).append(r)
 
     # 原有带 attrs 的 allow 规则，按 (obj, act) 分组
     restricted: Dict[tuple, List[List[str]]] = {}
@@ -243,6 +255,10 @@ async def update_group(group_with_policies: GroupWithPolicies):
 
     new_rules: List[List[str]] = []
     for policy in group_with_policies.policies:
+        identity = _rule_identity(policy.obj, policy.act, policy.eft, policy.attrs)
+        if identity in same:
+            new_rules.extend(same[identity])
+            continue
         rule = [
             role,                            # sub = 角色
             normalize_obj(policy.obj),       # obj（与添加策略时一致，统一补 /）

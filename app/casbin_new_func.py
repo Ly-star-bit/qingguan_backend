@@ -78,10 +78,16 @@ class CasbinPolicyFilter:
     # -----------------------------
     # 基础角色/管理员判断
     # -----------------------------
+    def _disabled_roles(self) -> set:
+        """roles 集合里被禁用（status=0）的角色，与 Casbin 角色管理器的禁用规则一致"""
+        return {r.get('role_name') for r in self.db['roles'].find({'status': 0}, {'role_name': 1})}
+
     def is_admin(self, user_id: str) -> bool:
         """
-        检查用户是否是管理员（是否拥有 admin_role）
+        检查用户是否是管理员（是否拥有 admin_role，且该角色未被禁用）
         """
+        if self.admin_role in self._disabled_roles():
+            return False
         admin_role_doc = self.collection.find_one(
             {'ptype': 'g', 'v0': user_id, 'v1': self.admin_role},
             {'_id': 1},
@@ -92,9 +98,10 @@ class CasbinPolicyFilter:
         """
         获取用户的所有角色（包含继承）。
         按层级批量查询：每一层只查一次（原来每个角色查一次）。
+        被禁用的角色跳过，也不再沿它继续向上找继承的角色。
         """
         roles: List[str] = []
-        visited = {user_id}
+        visited = {user_id} | self._disabled_roles()
         level = [user_id]
 
         while level:

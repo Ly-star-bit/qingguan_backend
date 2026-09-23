@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from casbin_pymongo_adapter import Adapter
 
 from app.casbin_new_func import CasbinPolicyFilter
+from app.casbin_role_manager import StatusAwareRoleManager
 
 # 加载环境变量
 load_dotenv()
@@ -109,11 +110,22 @@ filter_service = CasbinPolicyFilter(db)
 # 创建 Casbin 适配器
 adapter = Adapter(uri,MONGO_CONFIG['database'])
 enforcer = casbin.Enforcer('model.conf', adapter)
+# 支持禁用角色的角色管理器（见 app/casbin_role_manager.py），下面的 load_policy 会把角色关系建到它上面
+enforcer.set_role_manager(StatusAwareRoleManager(10))
 # 显式开启自动保存，避免手动 save_policy 造成重复写入
 enforcer.enable_auto_save(True)
 enforcer.add_function("satisfies", satisfies)
 # enforcer.add_function("keyMatch4", key_match4)
 enforcer.load_policy()
+
+
+def refresh_disabled_roles() -> None:
+    """从 roles 集合读取被禁用（status=0）的角色，同步给角色管理器；角色状态、名称变化或删除后调用"""
+    names = [r.get("role_name") for r in db.roles.find({"status": 0}, {"role_name": 1})]
+    enforcer.get_role_manager().set_disabled_roles(names)
+
+
+refresh_disabled_roles()
 
 # 为 casbin_rule 集合添加唯一索引，防止完全相同策略重复插入
 try:

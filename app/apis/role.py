@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import jwt
 from pymongo import MongoClient
-from app.db_mongo import get_session, enforcer
+from app.db_mongo import get_session, enforcer, refresh_disabled_roles
 from app.casbin_subjects import ensure_role_name_available, rename_subject_in_casbin
 from app.permission_core import parse_object_id, validate_name
 from pydantic import BaseModel
@@ -18,6 +18,12 @@ class RoleCreate(BaseModel):
     role_name: str
     description: Optional[str] = None
     permissions: Optional[List[str]] = []  # 
+    status: Optional[int] = 1  # 1: 启用, 0: 禁用（禁用后该角色的权限对成员不生效）
+
+
+def _validate_status(status: Optional[int]) -> None:
+    if status is not None and status not in (0, 1):
+        raise HTTPException(status_code=400, detail="status 只能是 0 或 1")
 
 
 class RoleUpdate(BaseModel):
@@ -60,6 +66,7 @@ def create_role(role: RoleCreate, session: MongoClient = Depends(get_session)):
     """
     db = session
     validate_name(role.role_name, "角色名")
+    _validate_status(role.status)
     if db.roles.find_one({"role_name": role.role_name}):
         raise HTTPException(status_code=400, detail="Role name already exists")
     ensure_role_name_available(db, role.role_name)
@@ -68,12 +75,14 @@ def create_role(role: RoleCreate, session: MongoClient = Depends(get_session)):
         "role_name": role.role_name,
         "description": role.description,
         "permissions": role.permissions or [],
-        "status": 1,
+        "status": 0 if role.status == 0 else 1,
         "created_at": datetime.now(),
         "updated_at": datetime.now(),
     }
     result = db.roles.insert_one(new_role)
     new_role["id"] = str(result.inserted_id)
+    if new_role["status"] == 0:
+        refresh_disabled_roles()
 
     return new_role
 
@@ -146,6 +155,7 @@ def update_role(
 
     old_name = existing_role.get("role_name")
     renamed = role_update.role_name is not None and role_update.role_name != old_name
+    _validate_status(role_update.status)
     if renamed:
         validate_name(role_update.role_name, "角色名")
         if db.roles.find_one({"role_name": role_update.role_name, "_id": {"$ne": role_oid}}):
@@ -175,6 +185,9 @@ def update_role(
 
     if renamed and old_name:
         rename_subject_in_casbin(old_name, role_update.role_name)
+    if renamed or role_update.status is not None:
+        # 禁用状态按角色名生效：状态或名称变化后同步给角色管理器，立即生效
+        refresh_disabled_roles()
 
     # 返回更新后的角色信息
     updated_role = db.roles.find_one({"_id": role_oid})
@@ -202,6 +215,7 @@ def delete_role(role_id: str, session: MongoClient = Depends(get_session)):
 
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Role not found")
+    refresh_disabled_roles()
 
     return {"message": "Role deleted successfully"}
 

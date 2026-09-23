@@ -6,6 +6,7 @@ from typing import List, Optional
 import jwt
 from openpyxl.descriptors import Bool
 from pymongo import MongoClient
+from app.auth_utils import is_admin_user
 from app.db_mongo import get_session, enforcer
 from app.casbin_subjects import ensure_username_available, rename_subject_in_casbin
 from app.permission_core import parse_object_id, validate_name
@@ -168,11 +169,13 @@ def create_user(user: UserCreate, session: MongoClient = Depends(get_session)):
 
 @user_router.put("/users/{user_id}/", response_model=UserOut, summary="更新指定用户信息")
 def update_user(
+    request: Request,
     user_id: str,
     username: Optional[str] = Form(None),
     # 前端不改密码时不传 password（原来是必填，不改密码保存会直接 422）
     password: Optional[str] = Form(None),
-    old_password: str = Form(...),
+    # 修改自己的账号必须填原始密码；管理员修改其他用户可以不填
+    old_password: Optional[str] = Form(None),
     status: Optional[int] = Form(None),
     session: MongoClient = Depends(get_session),
 ):
@@ -182,13 +185,19 @@ def update_user(
     if not user_db:
         raise HTTPException(status_code=404, detail="用户未找到")
 
-    # 验证原始密码是否正确
-    if not bcrypt.checkpw(
+    old_name = user_db["username"]
+    caller = (getattr(request.state, "user", None) or {}).get("sub")
+    # admin 账号在中间件里跳过所有权限检查，修改它始终要原始密码，
+    # 否则拥有 admin 角色的其他用户可以直接改掉它的密码并接管
+    admin_editing_other = caller != old_name and old_name != "admin" and is_admin_user(caller)
+    if not old_password and not admin_editing_other:
+        raise HTTPException(status_code=400, detail="请输入原始密码（只有管理员修改其他用户时可以不填）")
+    # 填了原始密码就照常校验（包括管理员）
+    if old_password and not bcrypt.checkpw(
         old_password.encode("utf-8"), user_db["password"].encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="原始密码不正确")
 
-    old_name = user_db["username"]
     renamed = bool(username) and username != old_name
     if renamed:
         # 用户名是 Casbin 的 subject：admin 账号在中间件里直接放行，不允许改名；

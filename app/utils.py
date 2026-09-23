@@ -30,7 +30,7 @@ from .schemas import ProductData
 from .db import pool_engine
 import jpype
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 # from pymongo import MongoClient
 from fastapi import HTTPException
@@ -62,20 +62,20 @@ load_dotenv()
 # 密钥和算法
 ACCESS_TOKEN_SECRET_KEY = os.getenv("ACCESS_TOKEN_SECRET_KEY")
 ACCESS_TOKEN_ALGORITHM = os.getenv("ACCESS_TOKEN_ALGORITHM")
+# 过期时间必须用带时区的 UTC 时间：PyJWT 会把不带时区的 datetime 当作 UTC，
+# 用 datetime.now() 在东八区服务器上会让 token 多活 8 小时。
+# type 用于区分 access / refresh，避免 refresh token 被当作 access token 使用。
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now() + expires_delta
-    else:
-        expire = datetime.now() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=15))
+    to_encode.update({"exp": expire, "type": "access"})
     encoded_jwt = jwt.encode(to_encode, ACCESS_TOKEN_SECRET_KEY, algorithm=ACCESS_TOKEN_ALGORITHM)
     return encoded_jwt
 
 def create_refresh_token(data: dict):
-    expire = datetime.now() + timedelta(days=1)
+    expire = datetime.now(timezone.utc) + timedelta(days=1)
     to_encode = data.copy()
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": "refresh"})
     encoded_jwt = jwt.encode(to_encode, ACCESS_TOKEN_SECRET_KEY, algorithm=ACCESS_TOKEN_ALGORITHM)
     return encoded_jwt
 # def set_cell_value(sheet, row, column, value):

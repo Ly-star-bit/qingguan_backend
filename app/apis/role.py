@@ -6,7 +6,7 @@ from typing import List, Optional
 import jwt
 from pymongo import MongoClient
 from app.db_mongo import get_session, enforcer
-from bson import ObjectId
+from app.permission_core import parse_object_id
 from pydantic import BaseModel
 from passlib.context import CryptContext
 from datetime import datetime
@@ -43,6 +43,33 @@ class RoleLogin(BaseModel):
 
 
 role_router = APIRouter(tags=["role"])
+
+
+def _remove_role_from_casbin(role_name: str) -> None:
+    """删除角色在 Casbin 中的全部数据：该角色的 p 规则、成员关系、角色自身的继承关系"""
+    enforcer.remove_filtered_policy(0, role_name)
+    enforcer.remove_filtered_grouping_policy(1, role_name)
+    enforcer.remove_filtered_grouping_policy(0, role_name)
+
+
+def _rename_role_in_casbin(old_name: str, new_name: str) -> None:
+    """
+    角色改名时同步迁移 Casbin 数据，否则原有策略和已分配的用户都会留在旧角色名下。
+    注意：casbin_pymongo_adapter 没有实现 add_policies / update_filtered_policies，
+    批量接口在 auto_save 下会静默失败（或只改内存），这里只能逐条操作。
+    """
+    for rule in [list(r) for r in enforcer.get_filtered_named_policy("p", 0, old_name)]:
+        enforcer.update_named_policy("p", rule, [new_name, *rule[1:]])
+
+    # 成员关系 g(user, old) 与角色自身的继承关系 g(old, parent)
+    for g in [list(r) for r in enforcer.get_filtered_named_grouping_policy("g", 1, old_name)]:
+        enforcer.remove_named_grouping_policy("g", g)
+        enforcer.add_named_grouping_policy("g", [g[0], new_name, *g[2:]])
+    for g in [list(r) for r in enforcer.get_filtered_named_grouping_policy("g", 0, old_name)]:
+        enforcer.remove_named_grouping_policy("g", g)
+        enforcer.add_named_grouping_policy("g", [new_name, *g[1:]])
+
+    enforcer.load_policy()
 
 
 @role_router.post("/roles/", response_model=Role, summary="创建新角色")
@@ -110,7 +137,8 @@ def read_role(role_id: str, session: MongoClient = Depends(get_session)):
     获取指定角色信息
     """
     db = session
-    role = db.roles.find_one({"_id": ObjectId(role_id)})
+    role_oid = parse_object_id(role_id, "角色ID")
+    role = db.roles.find_one({"_id": role_oid})
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
     role["id"] = str(role["_id"])
@@ -127,10 +155,16 @@ def update_role(
     更新指定角色信息
     """
     db = session
+    role_oid = parse_object_id(role_id, "角色ID")
     # 先检查角色是否存在
-    existing_role = db.roles.find_one({"_id": ObjectId(role_id)})
+    existing_role = db.roles.find_one({"_id": role_oid})
     if not existing_role:
         raise HTTPException(status_code=404, detail="Role not found")
+
+    old_name = existing_role.get("role_name")
+    renamed = role_update.role_name is not None and role_update.role_name != old_name
+    if renamed and db.roles.find_one({"role_name": role_update.role_name, "_id": {"$ne": role_oid}}):
+        raise HTTPException(status_code=400, detail="Role name already exists")
 
     # 准备更新数据
     update_data = {}
@@ -146,15 +180,18 @@ def update_role(
 
     # 更新角色
     result = db.roles.update_one(
-        {"_id": ObjectId(role_id)}, 
+        {"_id": role_oid}, 
         {"$set": update_data}
     )
 
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Role not found")
 
+    if renamed and old_name:
+        _rename_role_in_casbin(old_name, role_update.role_name)
+
     # 返回更新后的角色信息
-    updated_role = db.roles.find_one({"_id": ObjectId(role_id)})
+    updated_role = db.roles.find_one({"_id": role_oid})
     updated_role["id"] = str(updated_role["_id"])
     return updated_role
 
@@ -165,21 +202,17 @@ def delete_role(role_id: str, session: MongoClient = Depends(get_session)):
     删除指定角色
     """
     db = session
-    role = db.roles.find_one({"_id": ObjectId(role_id)})
+    role_oid = parse_object_id(role_id, "角色ID")
+    role = db.roles.find_one({"_id": role_oid})
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
 
-    # 删除角色相关的权限策略
-    # 获取所有包含该角色名的策略并删除
-    all_policies = enforcer.get_policy()
-    for policy in all_policies:
-        if policy[0] == role["role_name"]:  # role_name is in subject position
-            enforcer.remove_policy(policy[0], policy[1], policy[2])
-    
+    # 删除角色相关的 Casbin 数据（原来用 3 个字段删除 6 字段的规则，永远匹配不上）
+    _remove_role_from_casbin(role["role_name"])
     enforcer.load_policy()
-    
+
     # 从数据库删除角色
-    result = db.roles.delete_one({"_id": ObjectId(role_id)})
+    result = db.roles.delete_one({"_id": role_oid})
 
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Role not found")
@@ -197,13 +230,14 @@ def assign_permissions_to_role(
     为角色分配权限
     """
     db = session
-    role = db.roles.find_one({"_id": ObjectId(role_id)})
+    role_oid = parse_object_id(role_id, "角色ID")
+    role = db.roles.find_one({"_id": role_oid})
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
 
     # 更新角色的权限列表
     result = db.roles.update_one(
-        {"_id": ObjectId(role_id)},
+        {"_id": role_oid},
         {
             "$set": {
                 "permissions": permissions,
@@ -242,7 +276,8 @@ def get_role_permissions(role_id: str, session: MongoClient = Depends(get_sessio
     获取角色的权限列表
     """
     db = session
-    role = db.roles.find_one({"_id": ObjectId(role_id)})
+    role_oid = parse_object_id(role_id, "角色ID")
+    role = db.roles.find_one({"_id": role_oid})
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
 
@@ -259,7 +294,8 @@ def assign_role_to_user(
     将角色分配给用户，实际上是将角色的权限赋予用户
     """
     db = session
-    role = db.roles.find_one({"_id": ObjectId(role_id)})
+    role_oid = parse_object_id(role_id, "角色ID")
+    role = db.roles.find_one({"_id": role_oid})
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
 

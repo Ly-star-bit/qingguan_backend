@@ -1,36 +1,41 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Any, List, Optional, Dict
 
 from loguru import logger
 from pydantic import BaseModel, Field
-from app.db_mongo import get_session, enforcer,filter_service  # 确保已注册 satisfies 函数
+from app.db_mongo import enforcer, filter_service  # 确保已注册 satisfies 函数
 
+from app.auth_utils import ensure_self_or_admin, is_admin_user
+from app.permission_core import dump_attrs, load_attrs, normalize_obj, policy_row_to_dict
 from app.schemas import Policy, UpdatePolicy, Group, GroupWithPolicies
 import json
 
 from app.casbin_new_func import  FilterCondition
 
-def dump_attrs(attrs: dict | None) -> str:
-    if not attrs:
-        return "[]"
-    return json.dumps([attrs], ensure_ascii=False, separators=(",", ":"))
+# dump_attrs / load_attrs 已移到 app.permission_core，这里保留导出以兼容旧的引用方式
+__all__ = ["policy_router", "dump_attrs", "load_attrs"]
 
-def load_attrs(s: str | None) -> dict:
-    if not s:
-        return {}
-    try:
-        parsed = json.loads(s)
-        # 如果解析结果是列表且非空，取第一个元素作为 dict
-        if isinstance(parsed, list) and parsed:
-            return parsed[0] if isinstance(parsed[0], dict) else {}
-        # 如果直接是 dict（兼容旧格式），也接受
-        elif isinstance(parsed, dict):
-            return parsed
-        else:
-            return {}
-    except Exception:
-        return {}
 policy_router = APIRouter(prefix="/casbin", tags=["casbin"])
+
+
+def _implicit_policies(name: str) -> List[Dict]:
+    """某用户/角色的所有（含继承）p 规则"""
+    return [policy_row_to_dict(p) for p in enforcer.get_implicit_permissions_for_user(name)]
+
+
+def _existing_rule(ptype: str, rule: List[str]) -> List[str]:
+    """
+    定位已存在的规则：先按原样匹配；找不到时再按 obj 补 / 后匹配
+    （兼容 obj 未补 / 时写入的旧数据，也兼容前端传入未补 / 的 obj）
+    """
+    if enforcer.has_named_policy(ptype, rule):
+        return rule
+    normalized = [rule[0], normalize_obj(rule[1]), *rule[2:]]
+    if normalized != rule and enforcer.has_named_policy(ptype, normalized):
+        return normalized
+    return rule
+
+
 @policy_router.get("/policies/get_role_policies")
 async def get_role_policies(role: str):
     """
@@ -38,34 +43,10 @@ async def get_role_policies(role: str):
     约定：p 规则槽位为 [sub, obj, act, attrs(JSON), eft, desc]
     """
     try:
-        # 含继承关系的策略（推荐）
-        rules = enforcer.get_implicit_permissions_for_user(role)
-        # 如果你只想看该 role 直挂的 p 规则，可改为：
-        # rules = enforcer.get_filtered_named_policy("p", 0, role)
+        return _implicit_policies(role)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"读取策略失败: {e}")
 
-    results: List[Dict] = []
-    for p in rules:
-        # 有的 casbin 返回里不带 ptype，这里强制标为 "p"
-        sub = p[0] if len(p) > 0 else ""
-        obj = p[1] if len(p) > 1 else ""
-        act = p[2] if len(p) > 2 else ""
-        attrs = load_attrs(p[3] if len(p) > 3 else "{}")
-        eft = p[4] if len(p) > 4 and p[4] else "allow"
-        desc = p[5] if len(p) > 5 else ""
-   
-        results.append({
-            "ptype": "p",
-            "sub": sub,
-            "obj": obj,
-            "act": act,
-            "attrs": attrs,     # ★ 新增返回 attrs，便于前端展示/编辑
-            "eft": eft,
-            "description": desc
-        })
-
-    return results
 @policy_router.post("/policies/reload")
 async def reload_policies():
     enforcer.load_policy()
@@ -80,17 +61,7 @@ async def get_policies(policy_type: Optional[str] = Query(None, description="p �
     result = {}
 
     if not policy_type or policy_type == "p":
-        p_policies = enforcer.get_named_policy("p")
-        p_results = [{
-            "ptype": "p",
-            "sub": p[0] if len(p) > 0 else "",
-            "obj": p[1] if len(p) > 1 else "",
-            "act": p[2] if len(p) > 2 else "",
-            "attrs": load_attrs(p[3] if len(p) > 3 else "{}"),
-            "eft": p[4] if len(p) > 4 and p[4] else "allow",
-            "description": p[5] if len(p) > 5 else ""
-        } for p in p_policies]
-        result["p_policies"] = p_results
+        result["p_policies"] = [policy_row_to_dict(p) for p in enforcer.get_named_policy("p")]
 
     if not policy_type or policy_type == "g":
         g_policies = enforcer.get_named_grouping_policy("g")
@@ -107,11 +78,7 @@ async def get_policies(policy_type: Optional[str] = Query(None, description="p �
 @policy_router.post("/policies")
 async def add_policy(policy: Policy):
     """添加 p 策略（含 attrs JSON）"""
-    obj = policy.obj
-    if len(obj) > 1 and not obj.endswith('/'):
-                obj = obj + '/'
-    rule = [policy.sub, obj, policy.act, dump_attrs(policy.attrs), policy.eft, policy.description or ""]
-    print(rule)
+    rule = [policy.sub, normalize_obj(policy.obj), policy.act, dump_attrs(policy.attrs), policy.eft, policy.description or ""]
     success = enforcer.add_named_policy(policy.ptype, rule)
     if not success:
         raise HTTPException(status_code=400, detail="策略已存在或无法添加")
@@ -122,7 +89,7 @@ async def add_policy(policy: Policy):
 async def remove_policy(policy: Policy):
     """删除 p 策略"""
     rule = [policy.sub, policy.obj, policy.act, dump_attrs(policy.attrs), policy.eft, policy.description or ""]
-    success = enforcer.remove_named_policy(policy.ptype, rule)
+    success = enforcer.remove_named_policy(policy.ptype, _existing_rule(policy.ptype, rule))
     if not success:
         raise HTTPException(status_code=404, detail="策略不存在或无法删除")
     enforcer.load_policy()
@@ -140,12 +107,13 @@ async def update_policies(update_policies: List[UpdatePolicy]):
     rollback_log = []
     try:
         for i, up in enumerate(update_policies):
-            old_rule = [
+            old_rule = _existing_rule(up.old_ptype, [
                 up.old_sub, up.old_obj, up.old_act,
                 dump_attrs(up.old_attrs), up.old_eft, up.old_description or ""
-            ]
+            ])
+            # 新规则与添加时保持一致：obj 统一补 /
             new_rule = [
-                up.new_sub, up.new_obj, up.new_act,
+                up.new_sub, normalize_obj(up.new_obj), up.new_act,
                 dump_attrs(up.new_attrs), up.new_eft, up.new_description or ""
             ]
 
@@ -184,7 +152,7 @@ def _rollback_policies(enforcer, rollback_log: List[tuple]):
             elif op[0] == "update":
                 enforcer.update_named_policy(op[1], op[2], op[3])
         except Exception:
-            pass
+            logger.exception(f"回滚策略失败: {op}")
 
 @policy_router.get("/policies/check")
 async def check_permission(subject: str, object: str, action: str, env: Optional[str] = Query(None, description="JSON 字符串")):
@@ -193,7 +161,6 @@ async def check_permission(subject: str, object: str, action: str, env: Optional
     - env 传 JSON 字符串，如 {"start":"CN","dest":"US","type":"sea"}
     - 对不需要属性的策略，env 可为空或 {}
     """
-    import json
     env_dict = {}
     if env:
         try:
@@ -205,29 +172,8 @@ async def check_permission(subject: str, object: str, action: str, env: Optional
 
 @policy_router.get("/policies/get_user_policies")
 async def get_user_policies(username: str):
-    """获取用户的策略（按 sub 过滤）
-    
-    如果是 admin user 则返回所有的策略
-    """
-    # 检查是否为 admin 用户
-    # is_admin = (username == "admin") or ("admin" in enforcer.get_implicit_roles_for_user(username))
-    # if is_admin:
-    #     policies = enforcer.get_policy()   
-    # else:
-
-        # Step 1: 获取用户的所有权限(包括通过角色继承的)
-        # policies = enforcer.get_implicit_permissions_for_user(username)
-    policies = enforcer.get_implicit_permissions_for_user(username)
-    
-    return [{
-        "ptype": "p",
-        "sub": p[0],
-        "obj": p[1],
-        "act": p[2],
-        "attrs": load_attrs(p[3] if len(p) > 3 else "{}"),
-        "eft": p[4] if len(p) > 4 and p[4] else "allow",
-        "description": p[5] if len(p) > 5 else ""
-    } for p in policies]
+    """获取用户的所有（含角色继承）策略"""
+    return _implicit_policies(username)
 
 
 @policy_router.post("/policies/groups")
@@ -242,32 +188,75 @@ async def add_group(group: Group):
 
 @policy_router.delete("/policies/groups")
 async def remove_group(group: Group):
-    """删除用户组"""
-    if enforcer.remove_named_grouping_policy("g", [group.user, group.group, group.description or ""]):
+    """删除用户组：按 (user, role) 删除，不要求描述一致（添加时会自动生成描述）"""
+    if enforcer.remove_filtered_named_grouping_policy("g", 0, group.user, group.group):
         enforcer.load_policy()
         return {"message": "组删除成功"}
     else:
         raise HTTPException(status_code=400, detail="组不存在或无法删除")
 
+def _has_attrs(attrs_json: str) -> bool:
+    return bool(load_attrs(attrs_json))
+
+
 @policy_router.put("/policies/groups")
 async def update_group(group_with_policies: GroupWithPolicies):
     """
-    更新某 role 的全部 p 策略（覆盖写）：
-    - 用 update_filtered_named_policies("p", rules, 0, role) 按 sub=role 过滤替换
+    覆盖写某角色的接口策略（前端「保存角色接口权限」）。
+
+    - 按差异逐条落库：casbin_pymongo_adapter 没有实现 update_filtered_policies，
+      原来的 update_filtered_named_policies 只改了内存，随后 load_policy() 又从库里重新加载，
+      结果这个接口一直不生效。
+    - 保护（前端数据的已知问题）：
+      1) 前端只传 allow 规则，该角色已有的 deny 规则全部保留；
+      2) 「编辑接口」弹窗把所有 attrs 置空：某接口(obj+act)仍被选中、传来的 attrs 为空，
+         而原来有带 attrs 的 allow 规则时，沿用原来的规则（不放宽航线限制）。
     """
-    new_rules = []
+    role = group_with_policies.group
+    existing = [list(r) for r in enforcer.get_filtered_named_policy("p", 0, role)]
+
+    # 原有带 attrs 的 allow 规则，按 (obj, act) 分组
+    restricted: Dict[tuple, List[List[str]]] = {}
+    for r in existing:
+        if len(r) > 4 and str(r[4]).lower() == "allow" and _has_attrs(r[3]):
+            restricted.setdefault((normalize_obj(r[1]), r[2]), []).append(r)
+
+    new_rules: List[List[str]] = []
     for policy in group_with_policies.policies:
         rule = [
-            group_with_policies.group,       # sub = 角色
-            policy.obj,                      # obj
+            role,                            # sub = 角色
+            normalize_obj(policy.obj),       # obj（与添加策略时一致，统一补 /）
             policy.act,                      # act
             dump_attrs(policy.attrs),        # attrs JSON
             policy.eft,                      # eft
             policy.description or ""         # desc
         ]
-        new_rules.append(rule)
+        key = (rule[1], rule[2])
+        if str(policy.eft).lower() == "allow" and not policy.attrs and key in restricted:
+            new_rules.extend(restricted[key])
+        else:
+            new_rules.append(rule)
 
-    enforcer.update_filtered_named_policies("p", new_rules, 0, group_with_policies.group)
+    # 保留已有的 deny 规则
+    new_rules.extend(r for r in existing if len(r) > 4 and str(r[4]).lower() != "allow")
+
+    # 去重（保持顺序）
+    seen = set()
+    target: List[List[str]] = []
+    for r in new_rules:
+        k = tuple(r)
+        if k not in seen:
+            seen.add(k)
+            target.append(r)
+
+    existing_keys = {tuple(r) for r in existing}
+    for r in existing:
+        if tuple(r) not in seen:
+            enforcer.remove_named_policy("p", r)
+    for r in target:
+        if tuple(r) not in existing_keys:
+            enforcer.add_named_policy("p", r)
+
     enforcer.load_policy()
     return {"message": "组及策略更新成功"}
 
@@ -288,7 +277,7 @@ class FilterPoliciesRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
 
 @policy_router.post("/policies/filter")
-async def filter_policies_post(request: FilterPoliciesRequest):
+async def filter_policies_post(request: FilterPoliciesRequest, http_request: Request):
     """
     POST /policies/filter
     json:
@@ -301,14 +290,24 @@ async def filter_policies_post(request: FilterPoliciesRequest):
         "skip": 0,
         "limit": 10
     }
+    该接口只校验登录不走 Casbin（见 middleware.AUTH_ONLY_PATHS）：
+    非 admin 只能按 v0=自己 查询。
     """
+    v0_filter = next((f for f in request.filters if f.field == "v0" and f.operator == "eq"), None)
+    if v0_filter is not None:
+        ensure_self_or_admin(http_request, str(v0_filter.value))
+    else:
+        user = getattr(http_request.state, "user", None)
+        if user is not None and not is_admin_user(user.get("sub")):
+            raise HTTPException(status_code=403, detail="没有权限")
+
     try:
         conditions = [FilterCondition(
             field=f.field,
             value=f.value,
             operator=f.operator
         ) for f in request.filters]
-        
+
         return filter_service.filter_policies_advanced(
             conditions=conditions,
             skip=request.skip,
@@ -316,5 +315,5 @@ async def filter_policies_post(request: FilterPoliciesRequest):
             include_inheritance=True
         )
     except Exception as e:
-        logger.error(f"Error filtering policies: {e}")
-        return {"error": str(e)}
+        logger.exception(f"Error filtering policies: {e}")
+        raise HTTPException(status_code=500, detail=f"过滤策略失败: {e}")

@@ -96,7 +96,6 @@ MONGO_CONFIG = {
     'database': os.getenv("MONGO_DB")
 }
 uri=f"mongodb://{MONGO_CONFIG['username']}:{MONGO_CONFIG['password']}@{MONGO_CONFIG['host']}:{MONGO_CONFIG['port']}"
-filter_service = CasbinPolicyFilter(mongo_uri=uri,database_name=MONGO_CONFIG['database'])
 
 # 创建 MongoDB 客户端
 client = MongoClient(
@@ -105,6 +104,8 @@ client = MongoClient(
 
 # 获取数据库
 db = client[MONGO_CONFIG['database']]
+# 策略过滤服务复用同一个客户端（原来会额外创建一个 MongoClient）
+filter_service = CasbinPolicyFilter(db)
 # 创建 Casbin 适配器
 adapter = Adapter(uri,MONGO_CONFIG['database'])
 enforcer = casbin.Enforcer('model.conf', adapter)

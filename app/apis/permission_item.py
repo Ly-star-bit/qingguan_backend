@@ -1,16 +1,25 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, List, Optional
 from app.db_mongo import get_session, enforcer
-from bson import ObjectId
-from datetime import datetime
 from pydantic import BaseModel
+
+from app.permission_core import (
+    build_endpoint_index,
+    collect_allow_policies,
+    endpoint_path_candidates,
+    match_permission_attrs,
+    parse_attrs_list,
+    parse_object_id,
+    permission_code_key,
+    serialize_permission,
+)
 
 
 # 定义权限模型
 class PermissionItem(BaseModel):
     id: Optional[str] = None
-    code: str                   
-    name: str                   
+    code: str
+    name: str
     action: str                  # e.g., "read"
     menu_ids: Optional[List[str]] = []  # 可选：关联菜单用于前端分组（非必须）
     description: Optional[str] = None
@@ -18,72 +27,118 @@ class PermissionItem(BaseModel):
 
 
 class CreatePermissionItem(BaseModel):
-    code: str                   
-    name: str                  
+    code: str
+    name: str
     action: str                  # e.g., "read"
     menu_ids: Optional[List[str]] = [] # 可选：关联菜单用于前端分组（非必须）
     description: Optional[str] = None
     dynamic_params: Optional[Dict] = None  # 动态参数，用于处理动态权限
 
 
+# 清关文件制作菜单（/permission_item/qingguan_file/user/{username} 专用）
+QINGGUAN_FILE_MENU_ID = "68f2fe1b06800ece17e30da8"
+# 清关文件制作可选的全部起运国/目的国（拥有基础读取权限或 admin 时返回）
+QINGGUAN_ALL_COUNTRY = {
+    "startland": ["Vietnam", "China"],
+    "destination": ["America"]
+}
+
 permission_item_router = APIRouter(tags=["permission_item"])
+
+
+def resolve_user_permissions(db, username: str, menu_id: Optional[str] = None) -> List[dict]:
+    """
+    计算用户实际拥有的权限项（permissions 原始文档，已去重，保持原有顺序）：
+    1) 取 Casbin 隐式权限（含角色继承）中的 allow 规则
+    2) (path, method) → api_endpoints._id
+    3) endpoint._id → permissions.code，再按策略 attrs 与 dynamic_params 匹配
+    menu_id 不为空时，只保留关联了该菜单的权限项。
+    """
+    raw = enforcer.get_implicit_permissions_for_user(username)
+    policies = collect_allow_policies(raw, parse_attrs_list)
+    if not policies:
+        return []
+
+    eps = db.api_endpoints.find(
+        {"Path": {"$in": endpoint_path_candidates(policies)}},
+        {"_id": 1, "Path": 1, "Method": 1}
+    )
+    ep_index = build_endpoint_index(eps)
+
+    # 所有策略涉及的 endpoint 一次性查出对应权限项（原来是每条策略查一次）
+    all_endpoint_ids = {eid for ids in ep_index.values() for eid in ids}
+    if not all_endpoint_ids:
+        return []
+    oid_list = list(all_endpoint_ids)
+    str_list = [str(x) for x in oid_list]
+    candidates = list(db.permissions.find({"code": {"$in": oid_list + str_list}}))
+
+    # code → [(自然顺序下标, 权限项)]，用于按原来“每条策略单独查询”的顺序取回
+    perms_by_code: Dict[str, List[tuple]] = {}
+    for order, perm in enumerate(candidates):
+        perms_by_code.setdefault(permission_code_key(perm.get("code")), []).append((order, perm))
+
+    seen_ids = set()
+    result: List[dict] = []
+    for path, method, attrs in policies:
+        endpoint_ids = ep_index.get(f"{path}::{method}", [])
+        if not endpoint_ids:
+            continue
+        matched = []
+        for eid in endpoint_ids:
+            matched.extend(perms_by_code.get(str(eid), []))
+        matched.sort(key=lambda item: item[0])
+
+        for _, perm in matched:
+            if menu_id is not None and menu_id not in (perm.get("menu_ids") or []):
+                continue
+            if not match_permission_attrs(perm.get("dynamic_params"), attrs):
+                continue
+            perm_id = str(perm["_id"])
+            if perm_id not in seen_ids:
+                seen_ids.add(perm_id)
+                result.append(perm)
+    return result
+
 
 @permission_item_router.get("/permission_item", response_model=List[PermissionItem], summary="获取权限列表")
 async def get_permission_list(session = Depends(get_session)):
     """获取权限列表"""
     db = session
-    
-    permissions = list(db.permissions.find({}))
-    
-    permission_list = []
-    for permission in permissions:
-        permission_id = str(permission["_id"])
-        permission_dict = {
-            "id": permission_id,
-            "code": permission["code"],
-            "name": permission["name"],
-            # "resource": permission["resource"],
-            "action": permission["action"],
-            "menu_ids": permission.get("menu_ids"),
-            "description": permission.get("description"),
-            "dynamic_params": permission.get("dynamic_params")
-        }
-        permission_list.append(PermissionItem(**permission_dict))
-        
-    return permission_list
+    return [PermissionItem(**serialize_permission(p)) for p in db.permissions.find({})]
 
 
 @permission_item_router.post("/permission_item", summary="创建权限")
 async def create_permission_item(permission_item: CreatePermissionItem, session = Depends(get_session)):
     """创建权限"""
     db = session
-    
+
     # 构建查询条件，包含动态参数
     query = {"code": permission_item.code}
-    
+
     # 如果有动态参数，也需要检查动态参数是否匹配
     if permission_item.dynamic_params:
         query["dynamic_params"] = permission_item.dynamic_params
-    
+
     existing_permission = db.permissions.find_one(query)
-    
+
     if existing_permission:
         # 检查 menu_ids 是否相同
         existing_menu_ids = set(existing_permission.get("menu_ids", []) or [])
         new_menu_ids = set(permission_item.menu_ids or [])
-        
+
         if existing_menu_ids != new_menu_ids:
             # 如果 menu_ids 不同，合并两个集合
             merged_menu_ids = list(existing_menu_ids.union(new_menu_ids))
-            
+
             # 更新现有权限的 menu_ids
             db.permissions.update_one(
                 {"_id": existing_permission["_id"]},
                 {"$set": {"menu_ids": merged_menu_ids}}
             )
-            
+
             return {
-                "id": str(existing_permission["_id"]), 
+                "id": str(existing_permission["_id"]),
                 "message": "权限已存在，menu_ids 已更新合并",
                 "merged_menu_ids": merged_menu_ids
             }
@@ -122,13 +177,10 @@ async def check_user_permission(
 
     permission_id = str(permission["_id"])
 
-    # 使用get_user_permissions的逻辑，获取用户所有权限项
-    user_permissions = await get_user_permissions(username, session)
-
     # 检查指定的权限项是否在用户权限列表中
-    for perm in user_permissions:
-        if perm.id == permission_id:
-            return {"has_permission": True, "permission": perm}
+    for perm in resolve_user_permissions(db, username):
+        if str(perm["_id"]) == permission_id:
+            return {"has_permission": True, "permission": PermissionItem(**serialize_permission(perm))}
 
     return {"has_permission": False, "reason": "用户没有此权限项"}
 
@@ -137,11 +189,11 @@ async def check_user_permission(
 async def update_permission_item(permission_id: str, permission_item: CreatePermissionItem, session = Depends(get_session)):
     """更新权限"""
     db = session
-    
+
     permission_dict = permission_item.dict(exclude_unset=True)
-        
+
     result = db.permissions.update_one(
-        {"_id": ObjectId(permission_id)},
+        {"_id": parse_object_id(permission_id, "权限项ID")},
         {"$set": permission_dict}
     )
     if result.matched_count == 0:
@@ -153,17 +205,7 @@ async def update_permission_item(permission_id: str, permission_item: CreatePerm
 async def delete_permission_item(permission_id: str, session = Depends(get_session)):
     """删除权限"""
     db = session
-    
-    # 检查权限是否被使用
-    # 这里可以检查是否有用户或角色关联了这个权限
-    # 示例：检查casbin策略中是否存在该权限
-    try:
-        # 简单检查，实际项目中可能需要更复杂的检查
-        pass
-    except Exception:
-        pass
-    
-    result = db.permissions.delete_one({"_id": ObjectId(permission_id)})
+    result = db.permissions.delete_one({"_id": parse_object_id(permission_id, "权限项ID")})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="权限项未找到")
     return {"message": "权限项已删除"}
@@ -174,315 +216,45 @@ async def get_permission_by_id(permission_id: str, session = Depends(get_session
     """根据ID获取权限"""
     db = session
 
-    permission = db.permissions.find_one({"_id": ObjectId(permission_id)})
+    permission = db.permissions.find_one({"_id": parse_object_id(permission_id, "权限项ID")})
     if not permission:
         raise HTTPException(status_code=404, detail="权限项未找到")
-
-    permission_dict = {
-        "id": str(permission["_id"]),
-        "code": permission["code"],
-        "name": permission["name"],
-        # "resource": permission["resource"],
-        "action": permission["action"],
-        "menu_id": permission.get("menu_id"),
-        "description": permission.get("description"),
-        "dynamic_params": permission.get("dynamic_params")
-    }
-    return PermissionItem(**permission_dict)
+    return PermissionItem(**serialize_permission(permission))
 
 
 @permission_item_router.get("/permission_item/user/{username}", response_model=List[PermissionItem], summary="获取用户的所有权限项")
 async def get_user_permissions(username: str, session = Depends(get_session)):
     """获取指定用户的所有权限项"""
-    import json
     db = session
-
-    # 获取用户信息
-    user = db.users.find_one({"username": username})
-    if not user:
+    if not db.users.find_one({"username": username}, {"_id": 1}):
         raise HTTPException(status_code=404, detail="用户未找到")
 
-    # 从Casbin中获取用户的隐式权限
-    raw = enforcer.get_implicit_permissions_for_user(username)
-
-    # 解析策略并提取path、method和attrs_json
-    policies = []
-    # print(f'raw:{raw}')
-    for row in raw:
-        # row格式: [sub, path, method, attrs_json, eft, desc]
-        if len(row) < 5:
-            continue
-        sub, path, method, attrs_json, eft, *_ = row
-        if str(eft).lower() != "allow":
-            continue
-        if not path or not method:
-            continue
-        norm_path = (path or "/").rstrip("/") or "/"
-        norm_method = (method or "").upper()
-
-        # 解析attrs_json
-        try:
-            attrs = json.loads(attrs_json) if attrs_json else []
-        except (json.JSONDecodeError, TypeError):
-            attrs = []
-
-        policies.append((norm_path, norm_method, attrs))
-
-    if not policies:
-        return []
-
-    # 通过path和method查找api_endpoints
-    path_set = {p[0] for p in policies}
-    for i in list(path_set):
-        if not i.endswith("/"):
-            path_set.add(f"{i}/")
-
-    eps = list(db.api_endpoints.find(
-        {"Path": {"$in": list(path_set)}},
-        {"_id": 1, "Path": 1, "Method": 1}
-    ))
-
-    # 建立索引：path::method → endpoint_ids
-    ep_index = {}
-    for ep in eps:
-        k = f'{(ep.get("Path") or "/").rstrip("/") or "/"}::{str(ep.get("Method") or "").upper()}'
-        ep_index.setdefault(k, []).append(ep["_id"])
-
-    # 收集用户实际拥有的权限（考虑attrs）
-    user_permissions = []
-
-    for path, method, attrs in policies:
-        k = f"{path}::{method}"
-        endpoint_ids = ep_index.get(k, [])
-
-        if not endpoint_ids:
-            continue
-
-        oid_list = list(endpoint_ids)
-        str_list = [str(x) for x in oid_list]
-
-        # 查询此endpoint对应的权限
-        perms = list(db.permissions.find({
-            "code": {"$in": oid_list + str_list}
-        }))
-
-        for perm in perms:
-            perm_dynamic = perm.get("dynamic_params") or {}
-
-            # 如果attrs为空数组，则匹配没有dynamic_params或dynamic_params为空的权限（基础权限）
-            if not attrs or attrs == [{}]:
-                if not perm_dynamic:
-                    user_permissions.append(perm)
-            else:
-                # attrs是一个数组，需要检查每个条件
-                for attr in attrs:
-                    if not attr:
-                        if not perm_dynamic:
-                            user_permissions.append(perm)
-                            break
-                    else:
-                        # 检查permission的dynamic_params是否匹配policy的attrs
-                        match = True
-                        for key, value in attr.items():
-                            perm_value = perm_dynamic.get(key)
-                            if value == "*":
-                                continue
-                            if isinstance(value, list):
-                                if perm_value not in value:
-                                    match = False
-                                    break
-                            elif str(perm_value).upper() != str(value).upper():
-                                match = False
-                                break
-
-                        if match:
-                            user_permissions.append(perm)
-                            break
-
-    # 去重
-    seen_ids = set()
-    unique_permissions = []
-    for perm in user_permissions:
-        perm_id = str(perm["_id"])
-        if perm_id not in seen_ids:
-            seen_ids.add(perm_id)
-            unique_permissions.append(perm)
-
-    permissions_list = []
-    for permission in unique_permissions:
-        permission_id = str(permission["_id"])
-        permission_dict = {
-            "id": permission_id,
-            "code": permission["code"],
-            "name": permission["name"],
-            "action": permission["action"],
-            "menu_ids": permission.get("menu_ids"),
-            "description": permission.get("description"),
-            "dynamic_params": permission.get("dynamic_params")
-        }
-        permissions_list.append(PermissionItem(**permission_dict))
-    # print(f"permission:{permissions_list}")
-    return permissions_list
+    return [PermissionItem(**serialize_permission(p)) for p in resolve_user_permissions(db, username)]
 
 
 @permission_item_router.get("/permission_item/user/{username}/menu/{menu_id}", response_model=List[PermissionItem], summary="获取用户指定菜单的所有权限项")
 async def get_user_menu_permissions(username: str, menu_id: str, session = Depends(get_session)):
     """获取指定用户下某个菜单的所有权限项"""
-    import json
     db = session
-
-    # 获取用户信息
-    user = db.users.find_one({"username": username})
-    if not user:
+    if not db.users.find_one({"username": username}, {"_id": 1}):
         raise HTTPException(status_code=404, detail="用户未找到")
 
-    # 检查菜单是否存在
-    menu = db.menu.find_one({"_id": ObjectId(menu_id)})
-    if not menu:
+    if not db.menu.find_one({"_id": parse_object_id(menu_id, "菜单ID")}, {"_id": 1}):
         raise HTTPException(status_code=404, detail="菜单未找到")
 
-    # 从Casbin中获取用户的隐式权限
-    raw = enforcer.get_implicit_permissions_for_user(username)
-
-    # 解析策略并提取path、method和attrs_json
-    policies = []
-    for row in raw:
-        # row格式: [sub, path, method, attrs_json, eft, desc]
-        if len(row) < 5:
-            continue
-        _, path, method, attrs_json, eft, *_ = row
-        if str(eft).lower() != "allow":
-            continue
-        if not path or not method:
-            continue
-        norm_path = (path or "/").rstrip("/") or "/"
-        norm_method = (method or "").upper()
-
-        # 解析attrs_json
-        try:
-            attrs = json.loads(attrs_json) if attrs_json else []
-        except (json.JSONDecodeError, TypeError):
-            attrs = []
-
-        policies.append((norm_path, norm_method, attrs))
-
-    if not policies:
-        return []
-
-    # 通过path和method查找api_endpoints
-    path_set = {p[0] for p in policies}
-    for i in list(path_set):
-        if not i.endswith("/"):
-            path_set.add(f"{i}/")
-
-    eps = list(db.api_endpoints.find(
-        {"Path": {"$in": list(path_set)}},
-        {"_id": 1, "Path": 1, "Method": 1}
-    ))
-
-    # 建立索引：path::method → endpoint_ids
-    ep_index = {}
-    for ep in eps:
-        k = f'{(ep.get("Path") or "/").rstrip("/") or "/"}::{str(ep.get("Method") or "").upper()}'
-        ep_index.setdefault(k, []).append(ep["_id"])
-
-    # 收集用户实际拥有的权限（考虑attrs）
-    user_permissions = []
-
-    for path, method, attrs in policies:
-        k = f"{path}::{method}"
-        endpoint_ids = ep_index.get(k, [])
-
-        if not endpoint_ids:
-            continue
-
-        oid_list = list(endpoint_ids)
-        str_list = [str(x) for x in oid_list]
-
-        # 查询此endpoint对应的权限
-        perms = list(db.permissions.find({
-            "code": {"$in": oid_list + str_list}
-        }))
-
-        # 过滤出属于指定菜单的权限
-        perms = [p for p in perms if menu_id in (p.get("menu_ids") or [])]
-
-        for perm in perms:
-            perm_dynamic = perm.get("dynamic_params") or {}
-
-            # 如果attrs为空数组，则匹配没有dynamic_params或dynamic_params为空的权限（基础权限）
-            if not attrs or attrs == [{}]:
-                if not perm_dynamic:
-                    user_permissions.append(perm)
-            else:
-                # attrs是一个数组，需要检查每个条件
-                for attr in attrs:
-                    if not attr:
-                        if not perm_dynamic:
-                            user_permissions.append(perm)
-                            break
-                    else:
-                        # 检查permission的dynamic_params是否匹配policy的attrs
-                        match = True
-                        for key, value in attr.items():
-                            perm_value = perm_dynamic.get(key)
-                            if value == "*":
-                                continue
-                            if isinstance(value, list):
-                                if perm_value not in value:
-                                    match = False
-                                    break
-                            elif str(perm_value).upper() != str(value).upper():
-                                match = False
-                                break
-
-                        if match:
-                            user_permissions.append(perm)
-                            break
-
-    # 去重
-    seen_ids = set()
-    unique_permissions = []
-    for perm in user_permissions:
-        perm_id = str(perm["_id"])
-        if perm_id not in seen_ids:
-            seen_ids.add(perm_id)
-            unique_permissions.append(perm)
-
-    permissions_list = []
-    for permission in unique_permissions:
-        permission_id = str(permission["_id"])
-        permission_dict = {
-            "id": permission_id,
-            "code": permission["code"],
-            "name": permission["name"],
-            "action": permission["action"],
-            "menu_ids": permission.get("menu_ids") or [],
-            "description": permission.get("description"),
-            "dynamic_params": permission.get("dynamic_params")
-        }
-        permissions_list.append(PermissionItem(**permission_dict))
-
-    return permissions_list
+    permissions = resolve_user_permissions(db, username, menu_id=menu_id)
+    return [PermissionItem(**serialize_permission(p, default_menu_ids=[])) for p in permissions]
 
 
 @permission_item_router.get("/permission_item/qingguan_file/user/{username}", response_model=List[Dict], summary="获取指定用户在固定菜单下的权限项（特殊处理）")
 async def get_user_menu_permissions_fixed(username: str, session = Depends(get_session)):
     """获取指定用户在固定菜单下的权限项，按特殊规则处理返回数据"""
-    import json
     db = session
-    menu_id = "68f2fe1b06800ece17e30da8"
+    menu_id = QINGGUAN_FILE_MENU_ID
+    all_country = QINGGUAN_ALL_COUNTRY
 
-    # 获取用户信息
-    user = db.users.find_one({"username": username})
-    if not user:
+    if not db.users.find_one({"username": username}, {"_id": 1}):
         raise HTTPException(status_code=404, detail="用户未找到")
-
-    # 定义全部国家
-    all_country = {
-        "startland": ["Vietnam", "China"],
-        "destination": ["America"]
-    }
 
     # 如果是admin用户，直接返回全部权限
     if username == "admin":
@@ -491,124 +263,10 @@ async def get_user_menu_permissions_fixed(username: str, session = Depends(get_s
             {"category": "海运", "routes": all_country}
         ]
 
-    # 检查菜单是否存在
-    menu = db.menu.find_one({"_id": ObjectId(menu_id)})
-    if not menu:
+    if not db.menu.find_one({"_id": parse_object_id(menu_id, "菜单ID")}, {"_id": 1}):
         raise HTTPException(status_code=404, detail="菜单未找到")
 
-    # 从Casbin中获取用户的隐式权限
-    raw = enforcer.get_implicit_permissions_for_user(username)
-
-    # 解析策略并提取path、method和attrs_json
-    policies = []
-    for row in raw:
-        # row格式: [sub, path, method, attrs_json, eft, desc]
-        if len(row) < 5:
-            continue
-        _, path, method, attrs_json, eft, *_ = row
-        if str(eft).lower() != "allow":
-            continue
-        if not path or not method:
-            continue
-        norm_path = (path or "/").rstrip("/") or "/"
-        norm_method = (method or "").upper()
-
-        # 解析attrs_json
-        try:
-            attrs = json.loads(attrs_json) if attrs_json else []
-        except (json.JSONDecodeError, TypeError):
-            attrs = []
-
-        policies.append((norm_path, norm_method, attrs))
-
-    if not policies:
-        return []
-
-    # 通过path和method查找api_endpoints
-    path_set = {p[0] for p in policies}
-    for i in list(path_set):
-        if not i.endswith("/"):
-            path_set.add(f"{i}/")
-
-    eps = list(db.api_endpoints.find(
-        {"Path": {"$in": list(path_set)}},
-        {"_id": 1, "Path": 1, "Method": 1}
-    ))
-
-    # 建立索引：path::method → endpoint_ids
-    ep_index = {}
-    for ep in eps:
-        k = f'{(ep.get("Path") or "/").rstrip("/") or "/"}::{str(ep.get("Method") or "").upper()}'
-        ep_index.setdefault(k, []).append(ep["_id"])
-
-    # 收集用户实际拥有的权限（考虑attrs）
-    user_permissions = []
-
-    for path, method, attrs in policies:
-        k = f"{path}::{method}"
-        endpoint_ids = ep_index.get(k, [])
-
-        if not endpoint_ids:
-            continue
-
-        oid_list = list(endpoint_ids)
-        str_list = [str(x) for x in oid_list]
-
-        # 查询此endpoint对应的权限
-        perms = list(db.permissions.find({
-            "code": {"$in": oid_list + str_list}
-        }))
-
-        # 过滤出属于指定菜单的权限
-        perms = [p for p in perms if menu_id in (p.get("menu_ids") or [])]
-
-        for perm in perms:
-            perm_dynamic = perm.get("dynamic_params") or {}
-
-            # 如果attrs为空数组，则匹配没有dynamic_params或dynamic_params为空的权限（基础权限）
-            if not attrs or attrs == [{}]:
-                if not perm_dynamic:
-                    user_permissions.append(perm)
-            else:
-                # attrs是一个数组，需要检查每个条件
-                for attr in attrs:
-                    if not attr:
-                        # 空attr匹配无dynamic_params的权限
-                        if not perm_dynamic:
-                            user_permissions.append(perm)
-                            break
-                    else:
-                        # 检查permission的dynamic_params是否匹配policy的attrs
-                        match = True
-                        for key, value in attr.items():
-                            perm_value = perm_dynamic.get(key)
-                            # 通配符匹配
-                            if value == "*":
-                                continue
-                            # 列表匹配
-                            if isinstance(value, list):
-                                if perm_value not in value:
-                                    match = False
-                                    break
-                            # 精确匹配（忽略大小写）
-                            elif str(perm_value).upper() != str(value).upper():
-                                match = False
-                                break
-
-                        if match:
-                            user_permissions.append(perm)
-                            break
-
-    # 去重
-    seen_ids = set()
-    unique_permissions = []
-    for perm in user_permissions:
-        perm_id = str(perm["_id"])
-        if perm_id not in seen_ids:
-            seen_ids.add(perm_id)
-            unique_permissions.append(perm)
-
-    permissions = unique_permissions
+    permissions = resolve_user_permissions(db, username, menu_id=menu_id)
 
     # 按特殊规则处理返回数据
     result = []
@@ -679,21 +337,6 @@ async def get_user_menu_permissions_fixed(username: str, session = Depends(get_s
 
     # 如果没有特殊权限，直接返回权限列表
     if not result:
-        for permission in permissions:
-            permission_id = str(permission["_id"])
-            permission_dict = {
-                "id": permission_id,
-                "code": permission["code"],
-                "name": permission["name"],
-                "action": permission["action"],
-                "menu_ids": permission.get("menu_ids", []),
-                "description": permission.get("description"),
-                "dynamic_params": permission.get("dynamic_params")
-            }
-            result.append(permission_dict)
+        result = [serialize_permission(p, default_menu_ids=[]) for p in permissions]
 
     return result
-
-
-
-

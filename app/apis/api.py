@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from loguru import logger
 from app.db_mongo import get_session
 from bson import ObjectId
+from app.permission_core import parse_object_id
 from pydantic import BaseModel
 from app.db_mongo import enforcer
 from app.schemas import UpdateUserApiPermissions
@@ -50,28 +51,24 @@ async def get_api_endpoints(session = Depends(get_session)):
     """获取所有API端点,按ApiGroup分组"""
     db = session
     
-    # 获取所有不同的ApiGroup
+    # 分组顺序沿用 distinct 的顺序；端点一次查出后在内存中分组（原来每个分组查一次）
     api_groups = db.api_endpoints.distinct("ApiGroup")
-    
-    # 按组构建返回数据
-    result = {}
-    for group in api_groups:
-        endpoints = []
-        for endpoint in db.api_endpoints.find({"ApiGroup": group}):
-            endpoint["id"] = str(endpoint["_id"])
-            del endpoint["_id"]
-            endpoints.append(endpoint)
-        result[group] = endpoints
-        
+    result = {group: [] for group in api_groups}
+    for endpoint in db.api_endpoints.find({"ApiGroup": {"$in": api_groups}}):
+        endpoint["id"] = str(endpoint["_id"])
+        del endpoint["_id"]
+        result[endpoint.get("ApiGroup")].append(endpoint)
+
     return result
 
 @api_router.put("/api_endpoints/{endpoint_id}", summary="更新API端点")
 async def update_api_endpoint(endpoint_id: str, endpoint: ApiEndpoint, session = Depends(get_session)):
     """更新API端点"""
     db = session
+    endpoint_oid = parse_object_id(endpoint_id, "API端点ID")
 
     # 获取旧的端点信息
-    old_endpoint_data = db.api_endpoints.find_one({"_id": ObjectId(endpoint_id)})
+    old_endpoint_data = db.api_endpoints.find_one({"_id": endpoint_oid})
     if not old_endpoint_data:
         raise HTTPException(status_code=404, detail="API端点不存在")
     
@@ -86,7 +83,7 @@ async def update_api_endpoint(endpoint_id: str, endpoint: ApiEndpoint, session =
         
     # 检查Method和Path组合是否与其他记录冲突
     existing = db.api_endpoints.find_one({
-        "_id": {"$ne": ObjectId(endpoint_id)},
+        "_id": {"$ne": endpoint_oid},
         "ApiGroup": endpoint_dict["ApiGroup"],
         "Method": endpoint_dict["Method"],
         "Type": endpoint_dict.get("Type", "ACL"),  # 默认为ACL类型
@@ -96,7 +93,7 @@ async def update_api_endpoint(endpoint_id: str, endpoint: ApiEndpoint, session =
         raise HTTPException(status_code=400, detail="该Method和Path组合已存在")
         
     result = db.api_endpoints.update_one(
-        {"_id": ObjectId(endpoint_id)},
+        {"_id": endpoint_oid},
         {"$set": endpoint_dict}
     )
     
@@ -131,13 +128,14 @@ async def update_api_endpoint(endpoint_id: str, endpoint: ApiEndpoint, session =
 async def delete_api_endpoint(endpoint_id: str, session = Depends(get_session)):
     """删除API端点"""
     db = session
+    endpoint_oid = parse_object_id(endpoint_id, "API端点ID")
 
     # 获取端点信息以便删除Casbin策略
-    endpoint_data = db.api_endpoints.find_one({"_id": ObjectId(endpoint_id)})
+    endpoint_data = db.api_endpoints.find_one({"_id": endpoint_oid})
     if not endpoint_data:
         raise HTTPException(status_code=404, detail="API端点不存在")
 
-    result = db.api_endpoints.delete_one({"_id": ObjectId(endpoint_id)})
+    result = db.api_endpoints.delete_one({"_id": endpoint_oid})
 
     if result.deleted_count > 0:
         # 如果类型是RBAC，则删除Casbin策略

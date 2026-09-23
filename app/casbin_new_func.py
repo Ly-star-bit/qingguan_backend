@@ -1,6 +1,7 @@
+import re
 from typing import List, Dict, Any, Optional
-from pymongo import MongoClient
 from pymongo.collection import Collection
+from pymongo.database import Database
 from dataclasses import dataclass
 
 @dataclass
@@ -13,9 +14,9 @@ class FilterCondition:
 class CasbinPolicyFilter:
     """Casbin MongoDB 多字段过滤器 - 支持角色继承和管理员权限"""
 
-    def __init__(self, mongo_uri: str, database_name: str, admin_role: str = "admin_role"):
-        self.client = MongoClient(mongo_uri)
-        self.db = self.client[database_name]
+    def __init__(self, database: Database, admin_role: str = "admin_role"):
+        # 复用 db_mongo 中已建立的连接，不再单独创建 MongoClient
+        self.db = database
         self.collection: Collection = self.db['casbin_rule']
         self.admin_role = admin_role
 
@@ -31,7 +32,8 @@ class CasbinPolicyFilter:
                 query[condition.field] = condition.value
 
             elif condition.operator == "contains":
-                query[condition.field] = {"$regex": condition.value, "$options": "i"}
+                # 按字面量包含匹配，避免用户输入被当作正则
+                query[condition.field] = {"$regex": re.escape(str(condition.value)), "$options": "i"}
 
             elif condition.operator == "regex":
                 query[condition.field] = {"$regex": condition.value}
@@ -51,6 +53,13 @@ class CasbinPolicyFilter:
         """基于 build_query，但排除某些字段（例如 v0）"""
         kept = [c for c in conditions if c.field not in exclude_fields]
         return self.build_query(kept) if kept else {}
+
+    def _roles_query(self, conditions: List[FilterCondition], roles: List[str]) -> Dict[str, Any]:
+        """其余条件不变，v0 替换为“属于这些角色之一”，一次查询取回所有角色的策略"""
+        query = self._build_query_excluding(conditions, exclude_fields=['v0'])
+        query['v0'] = {'$in': roles}
+        query['ptype'] = 'p'
+        return query
 
     def _collapse_to_unique_v1(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -75,41 +84,28 @@ class CasbinPolicyFilter:
         """
         admin_role_doc = self.collection.find_one(
             {'ptype': 'g', 'v0': user_id, 'v1': self.admin_role},
+            {'_id': 1},
         )
         return admin_role_doc is not None
 
     def get_user_roles(self, user_id: str) -> List[str]:
         """
-        获取用户的所有角色（包含继承）
+        获取用户的所有角色（包含继承）。
+        按层级批量查询：每一层只查一次（原来每个角色查一次）。
         """
         roles: List[str] = []
+        visited = {user_id}
+        level = [user_id]
 
-        # 第一步：获取用户直接分配的角色
-        direct_roles = list(self.collection.find(
-            {'ptype': 'g', 'v0': user_id},
-            {'v1': 1, '_id': 0}
-        ))
-        for role_doc in direct_roles:
-            role_name = role_doc.get('v1')
-            if role_name and role_name not in roles:
-                roles.append(role_name)
-
-        # 第二步：递归获取角色的继承角色（role in role）
-        visited = set(roles)
-        queue = list(roles)
-
-        while queue:
-            current_role = queue.pop(0)
-            inherited_roles = list(self.collection.find(
-                {'ptype': 'g', 'v0': current_role},
-                {'v1': 1, '_id': 0}
-            ))
-            for role_doc in inherited_roles:
-                inherited_role = role_doc.get('v1')
-                if inherited_role and inherited_role not in visited:
-                    roles.append(inherited_role)
-                    visited.add(inherited_role)
-                    queue.append(inherited_role)
+        while level:
+            next_level: List[str] = []
+            for doc in self.collection.find({'ptype': 'g', 'v0': {'$in': level}}, {'v1': 1, '_id': 0}):
+                role_name = doc.get('v1')
+                if role_name and role_name not in visited:
+                    visited.add(role_name)
+                    roles.append(role_name)
+                    next_level.append(role_name)
+            level = next_level
 
         return roles
 
@@ -153,13 +149,7 @@ class CasbinPolicyFilter:
                 # 非管理员：沿用原逻辑（用户角色及继承）
                 all_roles = self.get_user_roles(user_id)
                 if all_roles:
-                    for role in all_roles:
-                        role_conditions = [c for c in conditions if c.field != 'v0']
-                        role_conditions.append(FilterCondition(field='v0', value=role, operator='eq'))
-                        role_query = self.build_query(role_conditions)
-                        role_query['ptype'] = 'p'
-                        role_results = list(self.collection.find(role_query, {'_id': 0}))
-                        results.extend(role_results)
+                    results.extend(self.collection.find(self._roles_query(conditions, all_roles), {'_id': 0}))
 
         return results
 
@@ -184,8 +174,9 @@ class CasbinPolicyFilter:
           然后对折叠结果按 v1 排序（如果 sort_by == 'v1'），再分页。
 
         - 非管理员：
-          保持原有行为；当 include_inheritance=True 时，合并其角色（含继承）的 p 记录；
-          再按 sort_by 排序（原始字段），最后分页。
+          当 include_inheritance=True 时，返回其角色（含继承）的 p 记录
+          （与原有行为一致：不包含直接挂在用户名下的 p 记录）；
+          排序、分页在数据库端完成。
         """
         query = self.build_query(conditions)
         query['ptype'] = p_type
@@ -215,29 +206,12 @@ class CasbinPolicyFilter:
                         'data': data
                     }
 
-                # 非管理员：合并角色权限
+                # 非管理员：一次查询取回所有角色的策略
                 all_roles = self.get_user_roles(user_id)
-                all_results: List[Dict[str, Any]] = []
-                for role in all_roles:
-                    role_conditions = [c for c in conditions if c.field != 'v0']
-                    role_conditions.append(FilterCondition(field='v0', value=role, operator='eq'))
-                    role_query = self.build_query(role_conditions)
-                    role_query['ptype'] = 'p'
-                    role_results = list(self.collection.find(role_query, {'_id': 0}))
-                    all_results.extend(role_results)
+                if not all_roles:
+                    return {'total': 0, 'skip': skip, 'limit': limit, 'data': []}
+                query = self._roles_query(conditions, all_roles)
 
-                total = len(all_results)
-                if sort_by:
-                    all_results.sort(key=lambda x: x.get(sort_by, ''))
-                results = all_results[skip:skip + limit]
-                return {
-                    'total': total,
-                    'skip': skip,
-                    'limit': limit,
-                    'data': results
-                }
-
-        # 非继承或非 p 类型：沿用原分页逻辑
         total = self.collection.count_documents(query)
         cursor = self.collection.find(query, {'_id': 0})
         if sort_by:

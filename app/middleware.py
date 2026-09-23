@@ -11,14 +11,16 @@ from starlette.responses import JSONResponse
 
 from fastapi import  HTTPException, status
 
-from datetime import datetime
 import jwt  # PyJWT
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 import os
+import hmac
+
 from app.api_keys.apis.api_keys import validate_api_key
-from app.db_mongo import get_session, enforcer
+from app.db_mongo import enforcer
+from app.system_status import is_system_forbidden
 
 load_dotenv()
 
@@ -71,9 +73,17 @@ EXCLUDED_PATHS = {
     "/api/process_excel_usp_data/",
     "/api/refresh/",
     "/api/17track/notify/",
-    "/api/menu/user/get_user_menu_permissions/",
-    '/api/casbin/policies/filter/',
 }
+
+# 只校验登录、不走 Casbin 的接口：所有登录用户都需要调用，
+# 接口内部通过 app.auth_utils.ensure_self_or_admin 限制只能查询自己（admin 除外）
+AUTH_ONLY_PATHS = {
+    "/api/menu/user/get_user_menu_permissions/",
+    "/api/casbin/policies/filter/",
+}
+
+# skudetail 外部调用使用的固定令牌，从环境变量读取；未配置时不启用
+SKUDETAIL_STATIC_TOKEN = os.getenv("SKUDETAIL_STATIC_TOKEN")
 
 # 前缀排除（用于 /static/xxx, /tiles/xxx 等）
 EXCLUDED_PREFIXES = ("/static/", "/tiles", )
@@ -84,7 +94,8 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
         method = request.method
         if len(path) > 1 and not path.endswith('/'):
                 path = path + '/'
-        logger.info(f"request.url.path: {path}")        # 1. 完全匹配的路径（无需鉴权）
+        logger.debug(f"request.url.path: {path}")
+        # 1. 完全匹配的路径（无需鉴权）
         if is_excluded(path):
             return await call_next(request)
 
@@ -95,7 +106,11 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
         # 从请求头获取 token
         api_key_header_value = request.headers.get("X-API-Key")
         if api_key_header_value:
-            await validate_api_key(request)
+            # 中间件里抛出的 HTTPException 不会被 FastAPI 处理（会变成 500），这里转成对应的响应
+            try:
+                await validate_api_key(request)
+            except HTTPException as e:
+                return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
             return await call_next(request)
         auth_header = request.headers.get("Authorization")
         
@@ -106,27 +121,28 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
             )
         
         token = auth_header.split(" ")[1]
-        if token == "k$loysdafgo123445$" and "skudetail" in request.url.path:
+        if (
+            SKUDETAIL_STATIC_TOKEN
+            and "skudetail" in request.url.path
+            and hmac.compare_digest(token.encode(), SKUDETAIL_STATIC_TOKEN.encode())
+        ):
             return await call_next(request)
         # logger.info(f"request.url.path:{request.url.path}")
         try:
-            # 验证并解码 token
+            # 验证并解码 token（jwt.decode 会校验 exp，过期时抛 ExpiredSignatureError）
             payload = jwt.decode(token, ACCESS_TOKEN_SECRET_KEY, algorithms=[ACCESS_TOKEN_ALGORITHM])
-            
-            # 检查 token 是否过期
-            exp_timestamp = payload.get("exp")
-            if exp_timestamp is None:
-                raise HTTPException(
+            if payload.get("exp") is None:
+                return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="令牌没有过期时间"
+                    content={"detail": "令牌没有过期时间"}
                 )
-            
-            if datetime.utcnow() > datetime.utcfromtimestamp(exp_timestamp):
-                raise HTTPException(
+            # refresh token 只能用于 /refresh 换取 access token
+            if payload.get("type") == "refresh":
+                return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="令牌已过期"
+                    content={"detail": "无效的令牌"}
                 )
-            # logger.info(f"payload:{payload}")
+
             # 将解码后的 payload 存储在请求状态中
             request.state.user = payload 
 
@@ -136,28 +152,17 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
             if obj.startswith("/api/"):
                 obj = obj[4:]
             action = request.method
-            logger.info(f"{subject}-{obj}-{action}")
-            # startland = request.query_params.get("startland")
-            # destination = request.query_params.get("destination")
-            # env = dict()
-            # if startland:
-            #     env = {
-            #         'startland':startland,
-            #         'destination':destination
-            #     }
-            #     # env.append(env_child)
-                
-            if subject != "admin":
-                db = next(get_session())
-                system_status = db.system_status.find_one({"_id": "system_forbidden"})
-                if system_status and system_status.get("forbidden") == 1:
+            logger.debug(f"{subject}-{obj}-{action}")
+
+            if subject != "admin" and path not in AUTH_ONLY_PATHS:
+                if is_system_forbidden():
                     return JSONResponse(
                         status_code=status.HTTP_403_FORBIDDEN,
                         content={"detail": "系统已封禁"}
                     )
                 
                 if not enforcer.enforce(subject, obj, action,{}):
-                    logger.info("木有权限")
+                    logger.info(f"没有权限: {subject}-{obj}-{action}")
                     return JSONResponse(
                         status_code=status.HTTP_403_FORBIDDEN,
                         content={"detail": "没有权限"}

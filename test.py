@@ -1,6 +1,6 @@
-from fentan import pingzheng_hubs_execute
+from fentan import xiamen_zhixuan_fentan_execute
 
 if __name__ == "__main__":
-    pingzheng_hubs_execute(
-        file_path=r"C:\Users\a1337\Desktop\fentan_origin_唯凯-26.07月报关费账单_1__20260916_174130_20260916174223_20260916180926.xlsx"
+    xiamen_zhixuan_fentan_execute(
+        file_path=r"C:\Users\a1337\Documents\WXWork\1688857683512575\Cache\File\2026-10\赫泊斯26.9月1.xls"
     )

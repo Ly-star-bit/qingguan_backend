@@ -297,7 +297,7 @@ class AsposeCellsNETHandler:
                         civ_sheet, civ_row, 6, item.get("unit_price", "")
                     )
                     self.set_cell_value(
-                        civ_sheet, civ_row, 7, round(item.get("total_price", 0))
+                        civ_sheet, civ_row, 7, round(item.get("total_price", 0), 2)
                     )
                     self.set_cell_value(civ_sheet, civ_row, 8, item.get("texture", ""))
                     self.set_cell_value(
@@ -463,7 +463,7 @@ class AsposeCellsNETHandler:
                         civ_sheet, civ_row, 7, item.get("unit_price", "")
                     )
                     self.set_cell_value(
-                        civ_sheet, civ_row, 8, round(item.get("total_price", 0))
+                        civ_sheet, civ_row, 8, round(item.get("total_price", 0), 2)
                     )
                     self.set_cell_value(
                         civ_sheet, civ_row, 9, item.get("address_name", "")
@@ -755,7 +755,7 @@ class AsposeCellsNETHandler:
                 self.set_cell_value(civ_sheet, civ_row, 4, item["quanity"])
                 self.set_cell_value(civ_sheet, civ_row, 5, item["danwei"])
                 self.set_cell_value(civ_sheet, civ_row, 6, item["unit_price"])
-                self.set_cell_value(civ_sheet, civ_row, 7, round(item["total_price"]))
+                self.set_cell_value(civ_sheet, civ_row, 7, round(item["total_price"], 2))
                 self.set_cell_value(civ_sheet, civ_row, 8, item["texture"])
                 self.set_cell_value(civ_sheet, civ_row, 9, item["note"])
 
@@ -1269,10 +1269,10 @@ class AsposeCellsNETHandler:
                     sheet,
                     civ_row,
                     18,
-                    round(float(item["total_price"])) * additional_duty_value,
+                    round(float(item["total_price"]), 2) * additional_duty_value,
                 )
                 self.set_cell_value(
-                    sheet, civ_row, 19, round(float(item["total_price"])) * duty_value
+                    sheet, civ_row, 19, round(float(item["total_price"]), 2) * duty_value
                 )
 
                 # 自动调整行高
@@ -1415,11 +1415,12 @@ def generate_excel_from_template_test(
     )
 
     # 转换为PDF
-    pdf_path = handler.excel_to_pdf(excel_path, "pdf", output_sheet_names=["CIV", "PL"])
+    # pdf_path = handler.excel_to_pdf(excel_path, "pdf", output_sheet_names=["CIV", "PL"])
     end_time = time.time()
     print(f"generate_excel_from_template_test 运行时间: {end_time - start_time:.2f} 秒")
 
-    return pdf_path
+    # return pdf_path
+    return excel_path
 
 
 def generate_excel_from_new_template_test(

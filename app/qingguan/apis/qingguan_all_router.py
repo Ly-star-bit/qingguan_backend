@@ -309,17 +309,18 @@ def process_shipping_data(
         else:
             # air空运
             # single_price = process_unit_price(product_record.get("单价"))
+            base_price = product_record.get("单价", 0)
             if (
                 port_detail
                 and port_detail.get("expansion_factor")
                 and float(port_detail.get("expansion_factor")) != 1
             ):
-                single_price = float(single_price) * float(
+                single_price = float(base_price) * float(
                     port_detail["expansion_factor"]
                 )
                 single_price = process_unit_price(single_price)
             else:
-                single_price = process_unit_price(product_record.get("单价"))
+                single_price = process_unit_price(base_price)
 
             detail_data_log = {
                 "hs_code": product_record.get("HS_CODE"),
@@ -330,14 +331,27 @@ def process_shipping_data(
                 "exemption_code": product_record.get("豁免代码"),
                 "category": product_record.get("类别"),
                 "box_nums": box_num,
-                "single_price": product_record.get("单价"),
+                "single_price": single_price,
                 "packing": product_record.get("件箱"),
             }
 
         if product.packing:
             packing = product.packing
         else:
-            packing = product_record.get("件箱")
+            raw_packing = product_record.get("件箱", 1)
+            if (
+                port_detail
+                and port_detail.get("pcs_factor")
+                and float(port_detail.get("pcs_factor")) != 1
+            ):
+                try:
+                    packing = int(round(float(raw_packing) * float(port_detail["pcs_factor"])))
+                except (ValueError, TypeError):
+                    packing = raw_packing
+            else:
+                packing = raw_packing
+
+        detail_data_log["packing"] = packing
 
         product_type = product_record.get("属性绑定工厂")
         address_name_list = list(
@@ -390,9 +404,12 @@ def process_shipping_data(
             "quanity": box_num * safe_float(packing, product_name),
             "danwei": "PCS" if product_record.get("HS_CODE") else "",
             "unit_price": single_price,
-            "total_price": safe_float(single_price, product_name)
-            * box_num
-            * safe_float(packing, product_name),
+            "total_price": round(
+                safe_float(single_price, product_name)
+                * box_num
+                * safe_float(packing, product_name),
+                2,
+            ),
             "HS_CODE": product_record.get("HS_CODE"),
             "DESCRIPTION": product_record.get("英文品名"),
             "ChineseName": product_record.get("中文品名"),
@@ -424,7 +441,7 @@ def process_shipping_data(
 
         results.append(product_data)
 
-    total_price_all = sum(i.get("total_price", 0) for i in results)
+    total_price_all = round(sum(i.get("total_price", 0) for i in results), 2)
     good_type_totals = {}
     for p in results:
         good_type = p.get("good_type", "未知")
@@ -655,9 +672,12 @@ def process_shipping_data_canada(
             "quanity": box_num * safe_float(packing, product_name),
             "danwei": "PCS" if product_record.get("HS_CODE") else "",
             "unit_price": single_price,
-            "total_price": safe_float(single_price, product_name)
-            * box_num
-            * safe_float(packing, product_name),
+            "total_price": round(
+                safe_float(single_price, product_name)
+                * box_num
+                * safe_float(packing, product_name),
+                2,
+            ),
             "HS_CODE": product_record.get("HS_CODE"),
             "DESCRIPTION": product_record.get("英文品名"),
             "ChineseName": product_record.get("中文品名"),
@@ -683,7 +703,7 @@ def process_shipping_data_canada(
 
         results.append(product_data)
 
-    total_price_all = sum(i.get("total_price", 0) for i in results)
+    total_price_all = round(sum(i.get("total_price", 0) for i in results), 2)
     good_type_totals = {}
     for p in results:
         good_type = p.get("good_type", "未知")
@@ -732,6 +752,7 @@ class PackingOptimizationRequest(BaseModel):
     k: int = 3
     min_boxes_per_product: int = 20
     expansion_factor: Optional[float] = None
+    pcs_factor: Optional[float] = None
     startland: str
     destination: str
     transport_type: str  # "air" 或 "sea"
@@ -757,6 +778,9 @@ def packing_selection_optimize(upload_data: PackingOptimizationRequest):
                 "selected_products": [],
                 "summary": {},
             }
+        if upload_data.pcs_factor and upload_data.pcs_factor != 1:
+            for p in products_data:
+                p["pcs_per_box"] = int(round(p.get("pcs_per_box", 1) * upload_data.pcs_factor))
     else:
         products_data = upload_data.products_data
 

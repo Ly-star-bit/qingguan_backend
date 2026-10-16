@@ -304,9 +304,12 @@ def process_shipping_data(
             "quanity": box_num * safe_float(packing, product_name),
             "danwei": "PCS" if product_record.get("HS_CODE") else "",
             "unit_price": single_price,
-            "total_price": safe_float(single_price, product_name)
-            * box_num
-            * safe_float(packing, product_name),
+            "total_price": round(
+                safe_float(single_price, product_name)
+                * box_num
+                * safe_float(packing, product_name),
+                2,
+            ),
             "HS_CODE": product_record.get("HS_CODE"),
             "DESCRIPTION": product_record.get("英文品名"),
             "ChineseName": product_record.get("中文品名"),
@@ -339,7 +342,7 @@ def process_shipping_data(
 
         results.append(product_data)
 
-    total_price_all = sum(i.get("total_price", 0) for i in results)
+    total_price_all = round(sum(i.get("total_price", 0) for i in results), 2)
     good_type_totals = {}
     for p in results:
         good_type = p.get("good_type", "未知")
@@ -3774,6 +3777,7 @@ class PackingOptimizationRequest(BaseModel):
     k: int = 3
     min_boxes_per_product: int = 20
     expansion_factor:Optional[float] = None
+    pcs_factor:Optional[float] = None
     startland:str
     destination:str
     transport_type: str  # "air" 或 "sea"
@@ -3788,6 +3792,9 @@ def packing_selection_optimize(upload_data: PackingOptimizationRequest):
             destination=upload_data.destination,
             transport_type=upload_data.transport_type
         )
+        if upload_data.pcs_factor and upload_data.pcs_factor != 1:
+            for p in products_data:
+                p["pcs_per_box"] = int(round(p.get("pcs_per_box", 1) * upload_data.pcs_factor))
     else:
         products_data = upload_data.products_data
     

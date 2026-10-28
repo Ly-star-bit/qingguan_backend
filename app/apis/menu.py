@@ -98,6 +98,25 @@ async def get_menu_tree(session=Depends(get_session)):
     """获取菜单树"""
     return _MenuIndex(session).build_tree()
 
+def _check_parent(db, parent_id: Optional[str], menu_id: Optional[str] = None) -> None:
+    """父级菜单必须存在，且不能是菜单自己或它的子孙（否则这一枝菜单在树里整个消失）"""
+    if parent_id is None:
+        return
+    index = _MenuIndex(db).by_id
+    node = index.get(parent_id)
+    if node is None:
+        raise HTTPException(status_code=400, detail="父级菜单不存在")
+    seen = set()
+    while node is not None:
+        nid = str(node["_id"])
+        if nid == menu_id:
+            raise HTTPException(status_code=400, detail="不能把菜单移到它自己或它的子菜单下")
+        if nid in seen:
+            break
+        seen.add(nid)
+        node = index.get(node.get("parent_id")) if node.get("parent_id") else None
+
+
 @menu_router.post("/menu", summary="创建菜单项")
 async def create_menu_item(menu_item: MenuItem, session = Depends(get_session)):
     """创建菜单项"""
@@ -107,6 +126,9 @@ async def create_menu_item(menu_item: MenuItem, session = Depends(get_session)):
         del menu_dict["id"]
     if "children" in menu_dict:
         del menu_dict["children"]
+    if "parent_id" in menu_dict:
+        menu_dict["parent_id"] = menu_dict["parent_id"] or None
+        _check_parent(db, menu_dict["parent_id"])
 
     result = db.menu.insert_one(menu_dict)
     return {"id": str(result.inserted_id)}
@@ -120,6 +142,10 @@ async def update_menu_item(menu_id: str, menu_item: MenuItem, session = Depends(
         del menu_dict["id"]
     if "children" in menu_dict:
         del menu_dict["children"]
+    if "parent_id" in menu_dict:
+        # 前端清空父级时传 null：设为顶级菜单（_MenuIndex 把 parent_id 为空的当作根）
+        menu_dict["parent_id"] = menu_dict["parent_id"] or None
+        _check_parent(db, menu_dict["parent_id"], menu_id)
 
     result = db.menu.update_one(
         {"_id": parse_object_id(menu_id, "菜单ID")},
@@ -136,7 +162,7 @@ async def delete_menu_item(menu_id: str, session = Depends(get_session)):
     menu_oid = parse_object_id(menu_id, "菜单ID")
     # 检查是否有子菜单
     if db.menu.find_one({"parent_id": menu_id}):
-        raise HTTPException(status_code=400, detail="Cannot delete menu item with children")
+        raise HTTPException(status_code=400, detail="该菜单下还有子菜单，请先删除或移走子菜单")
 
     result = db.menu.delete_one({"_id": menu_oid})
     if result.deleted_count == 0:

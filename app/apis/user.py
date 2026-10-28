@@ -152,8 +152,10 @@ def create_user(user: UserCreate, session: MongoClient = Depends(get_session)):
         raise HTTPException(status_code=400, detail="Username already exists")
     ensure_username_available(db, user.username)
 
+    if user.status not in (0, 1):
+        raise HTTPException(status_code=400, detail="status 只能是 0 或 1")
     hashed_password = bcrypt.hashpw(user.password.encode("utf-8"), bcrypt.gensalt())
-    new_user = {"username": user.username, "password": hashed_password.decode("utf-8")}
+    new_user = {"username": user.username, "password": hashed_password.decode("utf-8"), "status": user.status}
     result = db.users.insert_one(new_user)
     new_user["_id"] = result.inserted_id
 

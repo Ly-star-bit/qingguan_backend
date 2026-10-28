@@ -100,6 +100,12 @@ async def remove_policy(policy: Policy):
     rule = [policy.sub, policy.obj, policy.act, dump_attrs(policy.attrs), policy.eft, policy.description or ""]
     success = enforcer.remove_named_policy(policy.ptype, _existing_rule(policy.ptype, rule))
     if not success:
+        # 精确匹配不到（描述被改过、attrs 存储格式或键顺序不同）时，按「路径 + 方法 + 效果 + attrs」找同一条规则
+        target = _rule_identity(policy.obj, policy.act, policy.eft, policy.attrs)
+        for r in [list(r) for r in enforcer.get_filtered_named_policy(policy.ptype, 0, policy.sub)]:
+            if len(r) > 4 and _rule_identity(r[1], r[2], r[4], load_attrs(r[3])) == target:
+                success = enforcer.remove_named_policy(policy.ptype, r) or success
+    if not success:
         raise HTTPException(status_code=404, detail="策略不存在或无法删除")
     enforcer.load_policy()
     return {"message": "策略删除成功"}

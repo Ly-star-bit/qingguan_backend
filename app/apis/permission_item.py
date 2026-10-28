@@ -47,15 +47,17 @@ QINGGUAN_ALL_COUNTRY = {
 permission_item_router = APIRouter(tags=["permission_item"])
 
 
-def resolve_user_permissions(db, username: str, menu_id: Optional[str] = None) -> List[dict]:
+def resolve_user_permissions(db, username: str, menu_id: Optional[str] = None, direct_only: bool = False) -> List[dict]:
     """
     计算用户实际拥有的权限项（permissions 原始文档，已去重，保持原有顺序）：
     1) 取 Casbin 隐式权限（含角色继承）中的 allow 规则
     2) (path, method) → api_endpoints._id
     3) endpoint._id → permissions.code，再按策略 attrs 与 dynamic_params 匹配
-    menu_id 不为空时，只保留关联了该菜单的权限项。
+    menu_id 不为空时，只保留关联了该菜单的权限项；direct_only 时只看直接授予该用户的规则（不含角色继承）。
     """
     raw = enforcer.get_implicit_permissions_for_user(username)
+    if direct_only:
+        raw = [r for r in raw if r and r[0] == username]
     policies = collect_allow_policies(raw, parse_attrs_list)
     if not policies:
         return []
@@ -226,13 +228,13 @@ async def get_permission_by_id(permission_id: str, session = Depends(get_session
 
 
 @permission_item_router.get("/permission_item/user/{username}", response_model=List[PermissionItem], summary="获取用户的所有权限项")
-async def get_user_permissions(username: str, session = Depends(get_session)):
-    """获取指定用户的所有权限项"""
+async def get_user_permissions(username: str, direct: bool = False, session = Depends(get_session)):
+    """获取指定用户的所有权限项；direct=true 时只返回直接授予该用户的（不含从角色继承的）"""
     db = session
     if not db.users.find_one({"username": username}, {"_id": 1}):
         raise HTTPException(status_code=404, detail="用户未找到")
 
-    return [PermissionItem(**serialize_permission(p)) for p in resolve_user_permissions(db, username)]
+    return [PermissionItem(**serialize_permission(p)) for p in resolve_user_permissions(db, username, direct_only=direct)]
 
 
 @permission_item_router.get("/permission_item/user/{username}/menu/{menu_id}", response_model=List[PermissionItem], summary="获取用户指定菜单的所有权限项")

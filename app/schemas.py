@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Union
 from uuid import UUID
 from fastapi import File, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.dadan.models import CustomClearHistorySummaryLog
 
@@ -50,6 +50,15 @@ class GroupWithPolicies(BaseModel):
 class UserCreate(BaseModel):
     username: str
     password: str
+    # 1 启用 / 0 禁用；新建用户弹窗里的开关传布尔值
+    status: Optional[int] = 1
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status_from_bool(cls, v):
+        if isinstance(v, bool):
+            return 1 if v else 0
+        return v
 class UserLogin(BaseModel):
     username: str
     password: str

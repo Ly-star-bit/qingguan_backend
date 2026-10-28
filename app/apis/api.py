@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 from loguru import logger
 from app.db_mongo import get_session
 from bson import ObjectId
-from app.permission_core import parse_object_id
+from app.permission_core import norm_path, parse_object_id
 from pydantic import BaseModel
 from app.db_mongo import enforcer
 # 定义API端点模型
@@ -155,8 +155,17 @@ async def sync_from_openapi(request: Request, session=Depends(get_session)):
     openapi_schema = request.app.openapi()
     paths = openapi_schema.get("paths", {})
     created_count = 0
+    # 已登记的接口按「路径（去掉末尾 /）+ 方法」判断，与分组、类型无关，避免同一接口被重复登记
+    registered = {
+        (norm_path(e.get("Path")), str(e.get("Method") or "").upper())
+        for e in db.api_endpoints.find({}, {"Path": 1, "Method": 1})
+    }
 
     for path, path_item in paths.items():
+        # 中间件鉴权前会去掉请求路径的 /api 前缀（见 app/middleware.py），
+        # 接口登记和 Casbin 规则里的路径都不带 /api；带上的话分配的权限永远匹配不上
+        if path.startswith("/api/"):
+            path = path[4:]
         # 跳过 OpenAPI 自身和管理接口
         if any(path.startswith(prefix) for prefix in ["/docs", "/redoc", "/openapi", "/api_endpoints", "/api/api_endpoints"]):
             continue
@@ -177,14 +186,7 @@ async def sync_from_openapi(request: Request, session=Depends(get_session)):
 
             summary = operation.get("summary") or operation.get("description") or "No description"
 
-            existing = db.api_endpoints.find_one({
-                "ApiGroup": api_group,
-                "Method": method.upper(),
-                "Type": "ACL",
-                "Path": path
-            })
-
-            if not existing:
+            if (norm_path(path), method.upper()) not in registered:
                 # 根据 HTTP 方法自动设置 PermissionCode
                 action_map = {
                     "GET": "read",
@@ -204,6 +206,7 @@ async def sync_from_openapi(request: Request, session=Depends(get_session)):
                     "Description": summary,
                     "PermissionCode": permission_code,
                 })
+                registered.add((norm_path(path), method.upper()))
                 created_count += 1
 
     return {"message": f"同步完成，新增 {created_count} 个业务API端点。"}

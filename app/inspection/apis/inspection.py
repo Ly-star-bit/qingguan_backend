@@ -1,8 +1,9 @@
 """HUBS 查验工作台：由独立部署的 HUBS-Inspection 服务移植而来。
 
-登录沿用本系统的 JWT，接口访问仍由 Casbin 控制；模块内的业务角色沿用 HUBS：
-系统管理员即 owner，其他用户需要在「人员与权限」中绑定 monitor / analyst / viewer，
-未绑定的用户即使有接口权限也读不到数据。数据只写入 inspection_* 集合，不影响其他模块。
+登录沿用本系统的 JWT，接口访问由 Casbin 控制。业务角色（登记 / 处理 / 只读）也来自系统角色：
+在「角色管理」里的 inspection_monitor / inspection_analyst / inspection_viewer 三个角色
+（由 app/inspection/setup_roles.py 创建），给账号分配角色后，菜单、接口权限和业务角色一次生效。
+数据只写入 inspection_* 集合，不影响其他模块。
 """
 import hashlib
 import os
@@ -18,7 +19,7 @@ from loguru import logger
 from pymongo.errors import DuplicateKeyError
 
 from app.auth_utils import is_admin_user
-from app.db_mongo import db as _db, get_session
+from app.db_mongo import db as _db, enforcer, get_session
 
 inspection_router = APIRouter(prefix="/inspection", tags=["查验工作台"])
 
@@ -27,13 +28,19 @@ ROUNDS = "inspection_rounds"
 CARGO = "inspection_cargo"
 FILES = "inspection_files"
 AUDIT = "inspection_audit"
+# 旧版在模块内按账号绑定业务角色的集合，已改用系统角色，只有 setup_roles.py 迁移时读取
 MEMBERS = "inspection_members"
 
 # 附件按「附件ID 的 SHA-256」存放，与 HUBS 原 data/attachments 目录的命名一致，迁移时可直接复制
 FILE_DIR = Path(os.getenv("INSPECTION_FILE_DIR", "./file/inspection"))
 MAX_FILE_SIZE = 15 * 1024 * 1024
 
-ROLES = ("monitor", "analyst", "viewer")
+# 系统角色 → 业务角色；admin 以及同时拥有登记、处理两个角色的账号视为 owner（全部权限）
+SYSTEM_ROLES = {
+    "inspection_monitor": "monitor",
+    "inspection_analyst": "analyst",
+    "inspection_viewer": "viewer",
+}
 MONITOR_FIELDS = (
     "port", "noticeDate", "stationDate", "stationPlanDate", "stationPlanPeriod", "stationPeriod",
     "firstResult", "status", "releaseDate", "resultDate", "applicationDate", "approved",
@@ -82,16 +89,25 @@ def blob_path(file_id: str) -> Path:
     return FILE_DIR / hashlib.sha256(file_id.encode()).hexdigest()
 
 
-def _identity(request: Request, db) -> Dict[str, str]:
+def _identity(request: Request) -> Dict[str, str]:
     username = (getattr(request.state, "user", None) or {}).get("sub")
     if not username:
         raise HTTPException(status_code=401, detail="请先登录")
     if is_admin_user(username):
-        return {"username": username, "name": username, "role": "owner"}
-    member = db[MEMBERS].find_one({"_id": username})
-    if not member:
-        raise HTTPException(status_code=403, detail="账号尚未开通查验工作台权限，请联系管理员")
-    return {"username": username, "name": member.get("name") or username, "role": member["role"]}
+        role = "owner"
+    else:
+        # 含角色继承；被禁用的角色不会出现在这里
+        roles = {SYSTEM_ROLES[r] for r in enforcer.get_implicit_roles_for_user(username) if r in SYSTEM_ROLES}
+        if {"monitor", "analyst"} <= roles:
+            role = "owner"
+        else:
+            role = next((r for r in ("monitor", "analyst", "viewer") if r in roles), None)
+        if not role:
+            raise HTTPException(
+                status_code=403,
+                detail="账号尚未分配查验角色，请联系管理员在「角色管理」中分配 inspection_monitor、inspection_analyst 或 inspection_viewer",
+            )
+    return {"username": username, "name": username, "role": role}
 
 
 def _allow(user: Dict[str, str], roles) -> None:
@@ -142,7 +158,7 @@ def _save_shipment(db, s: Dict[str, Any], revision: Any, data: Dict[str, Any]) -
 
 @inspection_router.get("/workspace", summary="查验工作台数据（按业务角色过滤）")
 def get_workspace(request: Request, db=Depends(get_session)):
-    user = _identity(request, db)
+    user = _identity(request)
     role = user["role"]
     shipments = [
         s for s in db[SHIPMENTS].find().sort("updated", -1)
@@ -168,10 +184,6 @@ def get_workspace(request: Request, db=Depends(get_session)):
     cargo = [{"id": c.pop("_id"), **c} for c in related(CARGO)] if full else []
     files = [{"id": f.pop("_id"), **f} for f in related(FILES) if _can_read_file(role, f["category"])]
     audit = [{"id": a.pop("_id"), **a} for a in related(AUDIT)] if role != "viewer" else []
-    members, users = [], []
-    if role == "owner":
-        members = [{"username": m["_id"], "name": m.get("name", ""), "role": m["role"]} for m in db[MEMBERS].find()]
-        users = sorted(u["username"] for u in db.users.find({}, {"username": 1}) if u.get("username"))
     return {
         "user": user,
         "shipments": [shipment_out(s) for s in shipments],
@@ -179,14 +191,12 @@ def get_workspace(request: Request, db=Depends(get_session)):
         "cargo": cargo,
         "files": files,
         "audit": audit,
-        "members": members,
-        "users": users,
     }
 
 
 @inspection_router.get("/file", summary="下载查验附件")
 def download_file(file_id: str, request: Request, db=Depends(get_session)):
-    user = _identity(request, db)
+    user = _identity(request)
     f = db[FILES].find_one({"_id": file_id})
     if not f:
         raise HTTPException(status_code=404, detail="附件不存在")
@@ -212,7 +222,7 @@ def upload_file(
     file: UploadFile = File(...),
     db=Depends(get_session),
 ):
-    user = _identity(request, db)
+    user = _identity(request)
     _allow(user, ("monitor", "analyst"))
     _ship(db, shipment_id, user)
     is_monitor_file = category in MONITOR_FILES
@@ -242,26 +252,10 @@ def upload_file(
     return {"ok": True}
 
 
-@inspection_router.post("/workspace", summary="查验工作台操作（登记/跟进/处理/授权）")
+@inspection_router.post("/workspace", summary="查验工作台操作（登记/跟进/处理）")
 def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(get_session)):
-    user = _identity(request, db)
+    user = _identity(request)
     action = p.get("action")
-
-    if action == "member":
-        _allow(user, ())
-        username = str(p.get("username") or "").strip()
-        name = str(p.get("name") or "").strip()
-        if p.get("role") not in ROLES or not username or not name:
-            raise HTTPException(status_code=400, detail="请选择账号并填写姓名和角色")
-        if not db.users.find_one({"username": username}):
-            raise HTTPException(status_code=400, detail="系统中不存在该账号")
-        db[MEMBERS].update_one({"_id": username}, {"$set": {"name": name, "role": p["role"]}}, upsert=True)
-        return {"ok": True}
-
-    if action == "revoke":
-        _allow(user, ())
-        db[MEMBERS].delete_one({"_id": str(p.get("username") or "")})
-        return {"ok": True}
 
     if action == "create":
         _allow(user, ("monitor",))
@@ -285,6 +279,8 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         _log(db, shipment_id, user, "登记查验")
         return {"id": shipment_id}
 
+    if action not in ("station", "update", "round", "feedback", "cargo"):
+        raise HTTPException(status_code=400, detail="未知操作")
     s = _ship(db, str(p.get("shipmentId") or ""), user)
     data = s["data"]
 
@@ -403,5 +399,3 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         db[CARGO].insert_many(docs)
         _log(db, s["_id"], user, f"新增客户明细 {len(docs)} 行")
         return {"ok": True}
-
-    raise HTTPException(status_code=400, detail="未知操作")

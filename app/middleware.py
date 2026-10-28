@@ -22,6 +22,7 @@ from app.api_keys.apis.api_keys import validate_api_key
 from app.db_mongo import enforcer
 from app.permission_core import get_route_path
 from app.system_status import is_system_forbidden
+from app.session_guard import session_valid
 
 load_dotenv()
 
@@ -114,6 +115,9 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
                 await validate_api_key(request)
             except HTTPException as e:
                 return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+            # API Key 不走 Casbin（由密钥的接口范围控制），但系统封禁时同样不能调用
+            if is_system_forbidden():
+                return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": "系统已封禁"})
             return await call_next(request)
         auth_header = request.headers.get("Authorization")
         
@@ -144,6 +148,13 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     content={"detail": "无效的令牌"}
+                )
+            # 账号已禁用、删除、改名或改过密码：令牌作废。返回「令牌已过期」让前端去刷新，
+            # 刷新接口同样会拒绝，前端随后跳回登录页
+            if not session_valid(payload):
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"detail": "令牌已过期"}
                 )
 
             # 将解码后的 payload 存储在请求状态中

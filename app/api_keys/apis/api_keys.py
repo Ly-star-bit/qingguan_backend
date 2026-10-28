@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 from bson import ObjectId
+from bson.errors import InvalidId
 import secrets
 from datetime import datetime, timedelta
 from typing import List, Optional
 from app.db_mongo import db
-from app.permission_core import get_route_path
+from app.permission_core import get_route_path, norm_path, parse_object_id
+from casbin.util import key_match3
 from pymongo import ReturnDocument
 from pydantic import BaseModel
 
@@ -29,6 +31,9 @@ async def create_api_key(request: CreateApiKeyRequest):
     创建API密钥
     使用 secrets.token_urlsafe(32) 生成高熵随机密钥
     """
+    if not request.scopes:
+        # 没有指定接口的密钥原来等于不受限制（相当于管理员），现在一律拒绝访问，创建时必须选择
+        raise HTTPException(status_code=400, detail="请至少选择一个可访问的接口")
     # 生成高熵随机密钥
     api_key_value = secrets.token_urlsafe(32)
     
@@ -77,11 +82,15 @@ async def update_api_key(key_id: str, request: UpdateApiKeyRequest):
     if request.rate_limit is not None:
         update_data["rate_limit"] = request.rate_limit
     
+    if request.scopes is not None and not request.scopes:
+        raise HTTPException(status_code=400, detail="请至少选择一个可访问的接口")
+    if not update_data:
+        raise HTTPException(status_code=400, detail="没有需要更新的内容")
     result = db.api_keys.update_one(
-        {"_id": ObjectId(key_id)},
+        {"_id": parse_object_id(key_id, "密钥ID")},
         {"$set": update_data}
     )
-    if result.modified_count:
+    if result.matched_count:
         return {"code": 200, "message": "更新成功"}
     raise HTTPException(status_code=404, detail="API密钥不存在")
 
@@ -92,10 +101,10 @@ async def disable_api_key(key_id: str):
     相比删除更安全，可以随时重新启用
     """
     result = db.api_keys.update_one(
-        {"_id": ObjectId(key_id)},
+        {"_id": parse_object_id(key_id, "密钥ID")},
         {"$set": {"status": "inactive"}}
     )
-    if result.modified_count:
+    if result.matched_count:
         return {"code": 200, "message": "密钥已禁用"}
     raise HTTPException(status_code=404, detail="API密钥不存在")
 
@@ -105,10 +114,10 @@ async def enable_api_key(key_id: str):
     启用API密钥
     """
     result = db.api_keys.update_one(
-        {"_id": ObjectId(key_id)},
+        {"_id": parse_object_id(key_id, "密钥ID")},
         {"$set": {"status": "active"}}
     )
-    if result.modified_count:
+    if result.matched_count:
         return {"code": 200, "message": "密钥已启用"}
     raise HTTPException(status_code=404, detail="API密钥不存在")
 
@@ -119,7 +128,7 @@ async def delete_api_key(key_id: str):
     删除API密钥（永久删除，不推荐使用）
     建议使用禁用功能代替删除
     """
-    result = db.api_keys.delete_one({"_id": ObjectId(key_id)})
+    result = db.api_keys.delete_one({"_id": parse_object_id(key_id, "密钥ID")})
     if result.deleted_count:
         return {"code": 200, "message": "密钥已删除"}
     raise HTTPException(status_code=404, detail="API密钥不存在")
@@ -143,23 +152,27 @@ async def validate_api_key(request: Request):
     if api_key["status"] != "active":
         raise HTTPException(status_code=401, detail="API密钥已被禁用")
     
-    # 检查权限范围 - 现在验证的是 endpoint ID 而不是 method+path
+    # 检查权限范围：密钥只能调用 scopes 里登记的接口，没有指定接口的密钥一律拒绝。
+    # 原来按「带 /api 的实际路径」精确查找接口登记，而登记的路径不带 /api、且是 {参数} 模板，
+    # 永远查不到，范围检查从未生效，任何密钥都能调用所有接口。
     current_method = request.method
     # 与路由匹配的路径保持一致（request.url.path 带着 root_path，可被 X-Forwarded-Prefix 请求头篡改）
     current_path = get_route_path(request.scope) or "/"
-    allowed_scopes = api_key.get("scopes", [])
-    
-    # 检查端点权限：查找匹配的API端点
-    target_endpoint = db.api_endpoints.find_one({
-        "Method": current_method,
-        "Path": current_path
-    })
-    
-    # 如果找到目标端点，并且API密钥定义了权限范围，则验证权限
-    if target_endpoint and allowed_scopes:
-        endpoint_id = str(target_endpoint["_id"])
-        if endpoint_id not in allowed_scopes:
-            raise HTTPException(status_code=403, detail="API密钥没有访问此接口的权限")
+    if current_path.startswith("/api/"):
+        current_path = current_path[4:]
+    current_path = norm_path(current_path)
+    scope_ids = []
+    for scope in api_key.get("scopes") or []:
+        try:
+            scope_ids.append(ObjectId(scope))
+        except (InvalidId, TypeError):
+            continue
+    allowed = any(
+        key_match3(current_path, norm_path(e.get("Path")))
+        for e in db.api_endpoints.find({"_id": {"$in": scope_ids}, "Method": current_method}, {"Path": 1})
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="API密钥没有访问此接口的权限")
     
     # 检查速率限制（固定时间窗口）：
     # 原来比较的是累计调用次数 usage_count，永远不清零，累计超过 rate_limit 后这个密钥就永久 429。
@@ -203,7 +216,7 @@ async def get_api_key(key_id: str):
     """
     获取单个API密钥的详细信息（不返回密钥值）
     """
-    api_key = db.api_keys.find_one({"_id": ObjectId(key_id)})
+    api_key = db.api_keys.find_one({"_id": parse_object_id(key_id, "密钥ID")})
     if not api_key:
         raise HTTPException(status_code=404, detail="API密钥不存在")
     

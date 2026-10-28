@@ -3,7 +3,7 @@ from typing import Any, List, Optional, Dict
 
 from loguru import logger
 from pydantic import BaseModel, Field
-from app.db_mongo import enforcer, filter_service  # 确保已注册 satisfies 函数
+from app.db_mongo import db, enforcer, filter_service  # 确保已注册 satisfies 函数
 
 from app.auth_utils import is_admin_user
 from app.permission_core import (
@@ -192,12 +192,23 @@ async def get_user_policies(username: str):
 
 
 @policy_router.post("/policies/groups")
-async def add_group(group: Group):
+async def add_group(group: Group, request: Request):
     """添加用户组 g(user, role, desc)"""
     validate_name(group.user, "用户名")
     validate_name(group.group, "角色名")
     if group.user == group.group:
         raise HTTPException(status_code=400, detail="用户名和角色名不能相同")
+    # 原来不校验：可以把用户挂到另一个用户名下（继承对方直接授予的全部权限），
+    # 或挂到 admin 角色上（is_admin_user 视为管理员）
+    if group.group == "admin":
+        caller = (getattr(request.state, "user", None) or {}).get("sub")
+        if not is_admin_user(caller):
+            raise HTTPException(status_code=403, detail="只有管理员可以分配 admin 角色")
+    elif not db.roles.find_one({"role_name": group.group}, {"_id": 1}):
+        raise HTTPException(status_code=400, detail=f"角色 {group.group} 不存在，请先在「角色管理」中创建")
+    if not (db.users.find_one({"username": group.user}, {"_id": 1})
+            or db.roles.find_one({"role_name": group.user}, {"_id": 1})):
+        raise HTTPException(status_code=400, detail=f"用户或角色 {group.user} 不存在")
     policy = [group.user, group.group, sanitize_description(group.description or f"用户 {group.user} 具有 {group.group} 角色")]
     ensure_rule_loadable("g", policy)
     if enforcer.add_named_grouping_policy("g", policy):
@@ -240,6 +251,9 @@ async def update_group(group_with_policies: GroupWithPolicies):
          而原来有带 attrs 的 allow 规则时，沿用原来的规则（不放宽航线限制）。
     """
     role = validate_name(group_with_policies.group, "角色名")
+    # 这里按角色整体覆盖规则；传入用户名就会改写该用户直接授予的权限
+    if db.users.find_one({"username": role}, {"_id": 1}):
+        raise HTTPException(status_code=400, detail=f"{role} 是用户名，不是角色")
     existing = [list(r) for r in enforcer.get_filtered_named_policy("p", 0, role)]
 
     same: Dict[tuple, List[List[str]]] = {}

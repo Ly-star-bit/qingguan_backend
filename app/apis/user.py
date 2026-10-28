@@ -1,4 +1,6 @@
 import os
+import secrets
+import string
 import bcrypt
 from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request
 from typing import List, Optional
@@ -10,9 +12,9 @@ from app.auth_utils import is_admin_user
 from app.db_mongo import get_session, enforcer
 from app.casbin_subjects import ensure_username_available, rename_subject_in_casbin
 from app.permission_core import parse_object_id, validate_name
+from app.session_guard import forget, session_claims, session_valid
 from app.system_status import invalidate_system_status_cache
 from pydantic import BaseModel
-from passlib.context import CryptContext
 from datetime import timedelta, datetime
 from app.schemas import UserCreate, UserUpdate
 from app.utils import (
@@ -21,9 +23,6 @@ from app.utils import (
     create_access_token,
     create_refresh_token,
 )
-
-# 密码加密
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # 定义用户模型
@@ -87,11 +86,12 @@ def login_for_access_token(
             # 权限以服务端 Casbin 为准，不再把全部策略塞进 token；保留空数组兼容前端解析
             "permissions": [],
             "menu_ids": user_db.get("menu_ids", []),
+            **session_claims(user_db),
         },
         expires_delta=access_token_expires,
     )
 
-    refresh_token = create_refresh_token(data={"sub": user_db["username"]})
+    refresh_token = create_refresh_token(data={"sub": user_db["username"], **session_claims(user_db)})
     # 更新用户登录时间以及ip
     db.users.update_one(
         {"username": user_db["username"]},
@@ -119,13 +119,11 @@ def refresh_token(
             raise HTTPException(status_code=401, detail="Refresh token expired")
         username = payload.get("sub")
 
-        # 验证用户是否存在
-        user_db = session.users.find_one({"username": username})
-        if not user_db:
-            raise HTTPException(status_code=401, detail="Invalid user")
-        if user_db.get("status", 1) == 0:
-            # 用前端识别的 detail，让它直接跳回登录页
+        # 账号不存在、已禁用、已改名或令牌签发后改过密码：用前端识别的 detail，让它直接跳回登录页
+        forget(username)
+        if not session_valid(payload):
             raise HTTPException(status_code=401, detail="Refresh token expired")
+        user_db = session.users.find_one({"username": username})
 
         # 生成新的 access token
         access_token_expires = timedelta(hours=1)
@@ -134,6 +132,7 @@ def refresh_token(
                 "sub": username,
                 "permissions": [],
                 "menu_ids": user_db.get("menu_ids", []),
+                **session_claims(user_db),
             },
             expires_delta=access_token_expires,
         )
@@ -224,7 +223,12 @@ def update_user(
         update_data["status"] = status
 
     if update_data:
-        db.users.update_one({"_id": user_oid}, {"$set": update_data})
+        change = {"$set": update_data}
+        # 改密码、禁用、改名后，该账号已签发的令牌全部作废（自己改密码也要重新登录）
+        if password or status == 0 or renamed:
+            change["$inc"] = {"token_version": 1}
+        db.users.update_one({"_id": user_oid}, change)
+        forget(old_name, username or old_name)
     if renamed:
         # 角色分配和直接授予的规则跟着迁移到新用户名，旧用户名下不留规则
         rename_subject_in_casbin(old_name, username)
@@ -282,36 +286,63 @@ def read_user(user_id: str, session: MongoClient = Depends(get_session)):
     return _user_out(user)
 
 
+def _ensure_can_manage(request: Request, target: dict, action: str) -> None:
+    """
+    重置密码、删除账号的保护：admin 账号在中间件里跳过所有权限检查，不允许被这两个操作接管或删除；
+    拥有 admin 角色的账号只能由管理员操作；不能删除自己
+    """
+    caller = (getattr(request.state, "user", None) or {}).get("sub")
+    name = target["username"]
+    if name == "admin":
+        raise HTTPException(status_code=403, detail=f"admin 账号不能{action}")
+    if action == "删除" and caller == name:
+        raise HTTPException(status_code=400, detail="不能删除自己的账号")
+    if is_admin_user(name) and not is_admin_user(caller):
+        raise HTTPException(status_code=403, detail=f"只有管理员可以对管理员账号{action}")
+
+
 @user_router.delete("/users/{user_id}/", summary="删除指定用户及其权限")
-def delete_user(user_id: str, session: MongoClient = Depends(get_session)):
+def delete_user(request: Request, user_id: str, session: MongoClient = Depends(get_session)):
     db = session
     user_oid = parse_object_id(user_id, "用户ID")
     user = db.users.find_one({"_id": user_oid})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    _ensure_can_manage(request, user, "删除")
 
     # 删除用户权限
     enforcer.delete_roles_for_user(user["username"])
     enforcer.delete_user(user["username"])
 
     db.users.delete_one({"_id": user_oid})
+    forget(user["username"])
 
     return {"message": "User and associated permissions deleted successfully"}
 
 
-@user_router.post("/users/reset-password/", summary="重置指定用户密码为默认值")
-async def reset_password(user_id: str = Form(...), session=Depends(get_session)):
-    """重置密码"""
+@user_router.post("/users/reset-password/", summary="重置指定用户密码为随机临时密码")
+def reset_password(request: Request, user_id: str = Form(...), session=Depends(get_session)):
+    """重置为随机临时密码并返回（只返回这一次），该账号已登录的会话全部失效"""
     db = session
-    default_password = "123456"
-    hashed_password = pwd_context.hash(default_password)
-
-    result = db.users.update_one(
-        {"_id": parse_object_id(user_id, "用户ID")}, {"$set": {"password": hashed_password}}
-    )
-    if result.matched_count == 0:
+    user_oid = parse_object_id(user_id, "用户ID")
+    user = db.users.find_one({"_id": user_oid})
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "Password has been reset to default"}
+    _ensure_can_manage(request, user, "重置密码")
+
+    # 原来固定重置为 123456：重置后、本人改密前，任何人都能用它登录
+    # 去掉容易看错的 0 O o 1 l I，方便管理员口头或手抄转告
+    alphabet = "".join(c for c in string.ascii_letters + string.digits if c not in "0Oo1lI")
+    temp_password = "".join(secrets.choice(alphabet) for _ in range(10))
+    db.users.update_one(
+        {"_id": user_oid},
+        {
+            "$set": {"password": bcrypt.hashpw(temp_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")},
+            "$inc": {"token_version": 1},
+        },
+    )
+    forget(user["username"])
+    return {"message": "密码已重置", "password": temp_password}
 
 
 @user_router.post("/system/forbidden/", summary="设置系统封禁或解封状态")

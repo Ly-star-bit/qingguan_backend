@@ -44,6 +44,7 @@ from app.price_card.apis.price_card import price_card_router
 from app.qingguan.apis.web_vba_mongo import IPWhitelistMiddleware, web_vba_router
 from app.qingguan.apis.qingguan_all_router import qingguan_router
 from app.fentan.apis.all_fentan import fentan_router
+from app.inspection.apis.inspection import inspection_router
 from app.route_17track.apis.route_17track import router_17track
 from app.skudetail.apis.skudetail import skudetail_router
 from app.api_keys.apis.api_keys import api_key_router
@@ -141,6 +142,7 @@ app.include_router(api_key_router, prefix="/api")
 app.include_router(fentan_router, prefix="/api")
 app.include_router(permission_item_router, prefix="/api")
 app.include_router(tool_auto_router, prefix="/api")
+app.include_router(inspection_router, prefix="/api")
 # 挂载静态文件
 mount_static_files(app)
 

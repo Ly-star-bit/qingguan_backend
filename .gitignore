@@ -115,3 +115,5 @@ hs_err_pid*.log
 Aspose.PDF for .NET v25.8.0/
 AsposeCells_net/
 JAVA-Aspose.Excel-24.7/
+# 查验工作台附件（客户资料，不入库）
+file/inspection/

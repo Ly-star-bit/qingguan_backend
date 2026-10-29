@@ -300,7 +300,7 @@ def _ensure_can_manage(request: Request, target: dict, action: str) -> None:
     if action == "删除" and caller == name:
         raise HTTPException(status_code=400, detail="不能删除自己的账号")
     if is_admin_user(name) and not is_admin_user(caller):
-        raise HTTPException(status_code=403, detail=f"只有管理员可以对管理员账号{action}")
+        raise HTTPException(status_code=403, detail=f"管理员账号只有管理员可以{action}")
 
 
 @user_router.delete("/users/{user_id}/", summary="删除指定用户及其权限")

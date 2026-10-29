@@ -56,10 +56,8 @@ CORE_FIELDS = (
 )
 MONITOR_FILES = ("查验截图", "第一轮结果截屏", "7512文件")
 VIEWER_FILES = ("查验截图", "第一轮结果截屏")
-ANALYST_FILES = (
-    "主单", "分单", "仓单", "分单及仓单", "Segregation", "出口资料汇总", "整理完的出口资料", "更新后的发票及补充文件",
-    "相关预报文件",
-)
+# 对应文件的旧类别由 migrate_file_categories 换成新类别
+ANALYST_FILES = ("主单", "分单", "仓单", "Segregation", "发票", "其它", "相关预报文件")
 ROUND_FILE_RE = re.compile(r"^轮次:[^:]+:(提交|反馈)$")
 STATUSES = ("在查", "已放行", "安排退运")
 # 处理轮次的 CBP 反馈结果与应对方案：放行 → 已放行；申请退运 → 安排退运；继续 → 才能新增下一轮

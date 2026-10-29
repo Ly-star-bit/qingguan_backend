@@ -62,6 +62,9 @@ ANALYST_FILES = (
 )
 ROUND_FILE_RE = re.compile(r"^轮次:[^:]+:(提交|反馈)$")
 STATUSES = ("在查", "已放行", "安排退运")
+# 处理轮次的 CBP 反馈结果与应对方案：放行 → 已放行；申请退运 → 安排退运；继续 → 才能新增下一轮
+FEEDBACK_RESULTS = ("放行", "继续")
+PLANS = ("申请退运", "继续")
 FIRST_RESULTS = ("待反馈", "放行", "要求更新文件", "RTME 扣留", "其他扣留")
 PERIODS = ("", "上午", "下午")
 
@@ -131,6 +134,11 @@ def _file_label(category: str, name: str) -> str:
     """操作记录里的附件描述；轮次附件的类别带轮次 ID，换成可读的名称"""
     m = ROUND_FILE_RE.match(category)
     return f"{'轮次' + m.group(1) + '附件' if m else category} · {name}"
+
+
+def _rounds_of(db, shipment_id: str) -> list:
+    """按创建顺序排列的处理轮次，最后一个是最新一轮"""
+    return list(db[ROUNDS].find({"shipment_id": shipment_id}).sort([("created", 1), ("_id", 1)]))
 
 
 def _ship(db, shipment_id: str, user: Dict[str, str]) -> Dict[str, Any]:
@@ -296,7 +304,7 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         _log(db, shipment_id, user, "登记查验")
         return {"id": shipment_id}
 
-    if action not in ("station", "update", "round", "feedback", "cargo", "deleteFile"):
+    if action not in ("station", "update", "round", "feedback", "plan", "cargo", "deleteFile"):
         raise HTTPException(status_code=400, detail="未知操作")
     s = _ship(db, str(p.get("shipmentId") or ""), user)
     data = s["data"]
@@ -380,6 +388,9 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
             raise HTTPException(status_code=400, detail="处理日期和措施必填")
         if data.get("status") != "在查":
             raise HTTPException(status_code=400, detail="该票已离开在查池，不能新增轮次")
+        rounds = _rounds_of(db, s["_id"])
+        if rounds and rounds[-1].get("plan") != "继续":
+            raise HTTPException(status_code=400, detail="最新一轮的应对方案选择「继续」后才能新增一轮")
         db[ROUNDS].insert_one({
             "_id": str(uuid.uuid4()),
             "shipment_id": s["_id"],
@@ -389,6 +400,8 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
             "notes": str(body.get("notes") or ""),
             "feedbackDate": "",
             "feedback": "",
+            "feedbackResult": "",
+            "plan": "",
         })
         _log(db, s["_id"], user, "新增处理轮次")
         return {"ok": True}
@@ -398,13 +411,73 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         feedback_date = p.get("feedbackDate") or ""
         if feedback_date and not _valid_date(feedback_date):
             raise HTTPException(status_code=400, detail="日期格式无效")
-        r = db[ROUNDS].update_one(
-            {"_id": str(p.get("roundId") or ""), "shipment_id": s["_id"]},
-            {"$set": {"feedbackDate": feedback_date, "feedback": str(p.get("feedback") or "")}},
-        )
-        if not r.matched_count:
+        rounds = _rounds_of(db, s["_id"])
+        rnd = next((r for r in rounds if r["_id"] == str(p.get("roundId") or "")), None)
+        if not rnd:
             raise HTTPException(status_code=404, detail="未找到处理轮次")
-        _log(db, s["_id"], user, "更新CBP反馈")
+        changes = {"feedbackDate": feedback_date, "feedback": str(p.get("feedback") or "")}
+        note = ""
+        result = p.get("feedbackResult") or ""
+        before = rnd.get("feedbackResult") or ""
+        if "feedbackResult" in p and result != before:
+            if (p.get("feedbackResultBefore") or "") != before:
+                raise HTTPException(status_code=409, detail="反馈结果已被其他人修改，请刷新后再保存")
+            if result not in FEEDBACK_RESULTS:
+                raise HTTPException(status_code=400, detail="无效的反馈结果")
+            if rnd is not rounds[-1]:
+                raise HTTPException(status_code=400, detail="只能修改最新一轮的反馈结果")
+            status = data.get("status")
+            if result == "放行" and status == "在查":
+                release = feedback_date or date.today().isoformat()
+                _save_shipment(db, s, s["revision"], {**data, "status": "已放行", "releaseDate": release})
+                note = "，转入放行归档"
+            elif before == "放行" and status == "已放行":
+                _save_shipment(db, s, s["revision"], {**data, "status": "在查", "releaseDate": ""})
+                note = "，退回在查"
+            elif status != "在查" and not (result == "放行" and status == "已放行"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="这票已离开在查池，反馈结果不能再改；如需调整，请先在「登记与跟进」把当前状态改回「在查」",
+                )
+            changes["feedbackResult"] = result
+            if result != "继续":
+                # 应对方案只在反馈结果为「继续」时有意义
+                changes["plan"] = ""
+        db[ROUNDS].update_one({"_id": rnd["_id"]}, {"$set": changes})
+        _log(db, s["_id"], user, "更新CBP反馈" + (f"：反馈结果{result}{note}" if "feedbackResult" in changes else ""))
+        return {"ok": True}
+
+    if action == "plan":
+        _allow(user, ("analyst",))
+        plan = p.get("plan")
+        if plan not in PLANS:
+            raise HTTPException(status_code=400, detail="无效的应对方案")
+        rounds = _rounds_of(db, s["_id"])
+        if not rounds or rounds[-1]["_id"] != str(p.get("roundId") or ""):
+            raise HTTPException(status_code=400, detail="只能修改最新一轮的应对方案")
+        rnd = rounds[-1]
+        if rnd.get("feedbackResult") != "继续":
+            raise HTTPException(status_code=400, detail="反馈结果为「继续」时才能选择应对方案")
+        before = rnd.get("plan") or ""
+        if plan == before:
+            return {"ok": True}
+        if (p.get("planBefore") or "") != before:
+            raise HTTPException(status_code=409, detail="应对方案已被其他人修改，请刷新后再保存")
+        status = data.get("status")
+        note = ""
+        if plan == "申请退运" and status == "在查":
+            _save_shipment(db, s, s["revision"], {**data, "status": "安排退运"})
+            note = "，转入退运跟进"
+        elif before == "申请退运" and status == "安排退运":
+            _save_shipment(db, s, s["revision"], {**data, "status": "在查"})
+            note = "，退回在查"
+        elif status != "在查" and not (plan == "申请退运" and status == "安排退运"):
+            raise HTTPException(
+                status_code=400,
+                detail="这票已离开在查池，应对方案不能再改；如需调整，请先在「登记与跟进」把当前状态改回「在查」",
+            )
+        db[ROUNDS].update_one({"_id": rnd["_id"]}, {"$set": {"plan": plan}})
+        _log(db, s["_id"], user, f"应对方案：{plan}{note}")
         return {"ok": True}
 
     if action == "cargo":

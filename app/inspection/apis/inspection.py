@@ -48,7 +48,7 @@ MONITOR_FIELDS = (
 )
 ANALYST_FIELDS = (
     "description", "sensitive", "exportSummary", "customerMix", "updatedFiles", "fileNotes",
-    "ior", "structure", "declarationIssue", "declarationNotes",
+    "ior", "structure", "declarationIssue", "declarationNotes", "cbpOfficer",
 )
 CORE_FIELDS = (
     "port", "noticeDate", "stationDate", "stationPlanDate", "stationPlanPeriod", "stationPeriod",
@@ -56,7 +56,10 @@ CORE_FIELDS = (
 )
 MONITOR_FILES = ("查验截图", "第一轮结果截屏", "7512文件")
 VIEWER_FILES = ("查验截图", "第一轮结果截屏")
-ANALYST_FILES = ("主单", "分单", "仓单", "分单及仓单", "Segregation", "出口资料汇总", "整理完的出口资料", "更新后的发票及补充文件")
+ANALYST_FILES = (
+    "主单", "分单", "仓单", "分单及仓单", "Segregation", "出口资料汇总", "整理完的出口资料", "更新后的发票及补充文件",
+    "相关预报文件",
+)
 ROUND_FILE_RE = re.compile(r"^轮次:[^:]+:(提交|反馈)$")
 STATUSES = ("在查", "已放行", "安排退运")
 FIRST_RESULTS = ("待反馈", "放行", "要求更新文件", "RTME 扣留", "其他扣留")

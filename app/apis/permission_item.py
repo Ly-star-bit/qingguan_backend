@@ -116,14 +116,14 @@ async def create_permission_item(permission_item: CreatePermissionItem, session 
     """创建权限"""
     db = session
 
-    # 构建查询条件，包含动态参数
-    query = {"code": permission_item.code}
-
-    # 如果有动态参数，也需要检查动态参数是否匹配
-    if permission_item.dynamic_params:
-        query["dynamic_params"] = permission_item.dynamic_params
-
-    existing_permission = db.permissions.find_one(query)
+    # 同一接口 + 同一组动态参数只保留一个权限项。
+    # 原来不带动态参数时只按 code 查，会命中同接口下带参数的权限项（如 scope=admin 的那条），
+    # 把菜单合并到别人身上、填写的名称被丢掉，前端还提示创建成功；在这里比较，空参数和 None 视为相同、不受键顺序影响
+    params = permission_item.dynamic_params or {}
+    existing_permission = next(
+        (p for p in db.permissions.find({"code": permission_item.code}) if (p.get("dynamic_params") or {}) == params),
+        None,
+    )
 
     if existing_permission:
         # 检查 menu_ids 是否相同
@@ -143,11 +143,14 @@ async def create_permission_item(permission_item: CreatePermissionItem, session 
             return {
                 "id": str(existing_permission["_id"]),
                 "message": "权限已存在，menu_ids 已更新合并",
-                "merged_menu_ids": merged_menu_ids
+                "merged_menu_ids": merged_menu_ids,
+                # 前端据此提示“已存在、菜单已合并”，而不是“创建成功”
+                "existed": True,
+                "name": existing_permission.get("name"),
             }
         else:
             # menu_ids 相同，返回已存在错误
-            raise HTTPException(status_code=400, detail="权限码已存在")
+            raise HTTPException(status_code=400, detail=f"该接口已有相同参数的权限项「{existing_permission.get('name')}」")
     else:
         # 权限不存在，创建新权限
         permission_dict = permission_item.dict(exclude_unset=True)

@@ -60,8 +60,8 @@ VIEWER_FILES = ("查验截图", "第一轮结果截屏")
 ANALYST_FILES = ("主单", "分单", "仓单", "Segregation", "发票", "其它", "相关预报文件")
 ROUND_FILE_RE = re.compile(r"^轮次:[^:]+:(提交|反馈)$")
 STATUSES = ("在查", "已放行", "安排退运")
-# 处理轮次的 CBP 反馈结果与应对方案：放行 → 已放行；申请退运 → 安排退运；继续 → 才能新增下一轮
-FEEDBACK_RESULTS = ("放行", "继续")
+# 处理轮次的 CBP 反馈结果与应对方案：放行 → 已放行；新要求 → 选应对方案；申请退运 → 安排退运；继续 → 才能新增下一轮
+FEEDBACK_RESULTS = ("放行", "新要求")
 PLANS = ("申请退运", "继续")
 FIRST_RESULTS = ("待反馈", "放行", "要求更新文件", "RTME 扣留", "其他扣留")
 PERIODS = ("", "上午", "下午")
@@ -134,6 +134,12 @@ def _file_label(category: str, name: str) -> str:
     return f"{'轮次' + m.group(1) + '附件' if m else category} · {name}"
 
 
+def _feedback_result(rnd: Dict[str, Any]) -> str:
+    """反馈结果；「新要求」最初叫「继续」，旧记录按新名称处理"""
+    value = rnd.get("feedbackResult") or ""
+    return "新要求" if value == "继续" else value
+
+
 def _rounds_of(db, shipment_id: str) -> list:
     """按创建顺序排列的处理轮次，最后一个是最新一轮"""
     return list(db[ROUNDS].find({"shipment_id": shipment_id}).sort([("created", 1), ("_id", 1)]))
@@ -203,7 +209,8 @@ def get_workspace(request: Request, db=Depends(get_session)):
 
     full = role in ("owner", "analyst")
     rounds = [
-        {"id": r.pop("_id"), "shipmentId": r.pop("shipment_id"), **r} for r in related(ROUNDS)
+        {"id": r.pop("_id"), "shipmentId": r.pop("shipment_id"), **r, "feedbackResult": _feedback_result(r)}
+        for r in related(ROUNDS)
     ] if full else []
     cargo = [{"id": c.pop("_id"), **c} for c in related(CARGO)] if full else []
     files = [
@@ -416,7 +423,7 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         changes = {"feedbackDate": feedback_date, "feedback": str(p.get("feedback") or "")}
         note = ""
         result = p.get("feedbackResult") or ""
-        before = rnd.get("feedbackResult") or ""
+        before = _feedback_result(rnd)
         if "feedbackResult" in p and result != before:
             if (p.get("feedbackResultBefore") or "") != before:
                 raise HTTPException(status_code=409, detail="反馈结果已被其他人修改，请刷新后再保存")
@@ -438,8 +445,8 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
                     detail="这票已离开在查池，反馈结果不能再改；如需调整，请先在「登记与跟进」把当前状态改回「在查」",
                 )
             changes["feedbackResult"] = result
-            if result != "继续":
-                # 应对方案只在反馈结果为「继续」时有意义
+            if result != "新要求":
+                # 应对方案只在反馈结果为「新要求」时有意义
                 changes["plan"] = ""
         db[ROUNDS].update_one({"_id": rnd["_id"]}, {"$set": changes})
         _log(db, s["_id"], user, "更新CBP反馈" + (f"：反馈结果{result}{note}" if "feedbackResult" in changes else ""))
@@ -454,8 +461,8 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         if not rounds or rounds[-1]["_id"] != str(p.get("roundId") or ""):
             raise HTTPException(status_code=400, detail="只能修改最新一轮的应对方案")
         rnd = rounds[-1]
-        if rnd.get("feedbackResult") != "继续":
-            raise HTTPException(status_code=400, detail="反馈结果为「继续」时才能选择应对方案")
+        if _feedback_result(rnd) != "新要求":
+            raise HTTPException(status_code=400, detail="反馈结果为「新要求」时才能选择应对方案")
         before = rnd.get("plan") or ""
         if plan == before:
             return {"ok": True}

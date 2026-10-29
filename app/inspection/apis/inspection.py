@@ -118,6 +118,21 @@ def _allow(user: Dict[str, str], roles) -> None:
         raise HTTPException(status_code=403, detail="当前角色没有此操作权限")
 
 
+def _check_file_category(user: Dict[str, str], category: str, verb: str) -> None:
+    """上传、删除附件的权限相同：登记角色管登记类附件，处理角色管其余附件，owner 都可以"""
+    is_monitor_file = category in MONITOR_FILES
+    if not (is_monitor_file or category in ANALYST_FILES or ROUND_FILE_RE.match(category)):
+        raise HTTPException(status_code=400, detail="无效的附件类别")
+    if (user["role"] == "monitor" and not is_monitor_file) or (user["role"] == "analyst" and is_monitor_file):
+        raise HTTPException(status_code=403, detail=f"附件类别无权{verb}")
+
+
+def _file_label(category: str, name: str) -> str:
+    """操作记录里的附件描述；轮次附件的类别带轮次 ID，换成可读的名称"""
+    m = ROUND_FILE_RE.match(category)
+    return f"{'轮次' + m.group(1) + '附件' if m else category} · {name}"
+
+
 def _ship(db, shipment_id: str, user: Dict[str, str]) -> Dict[str, Any]:
     s = db[SHIPMENTS].find_one({"_id": shipment_id})
     if not s:
@@ -185,7 +200,9 @@ def get_workspace(request: Request, db=Depends(get_session)):
         {"id": r.pop("_id"), "shipmentId": r.pop("shipment_id"), **r} for r in related(ROUNDS)
     ] if full else []
     cargo = [{"id": c.pop("_id"), **c} for c in related(CARGO)] if full else []
-    files = [{"id": f.pop("_id"), **f} for f in related(FILES) if _can_read_file(role, f["category"])]
+    files = [
+        {"id": f.pop("_id"), **f} for f in related(FILES) if not f.get("deleted") and _can_read_file(role, f["category"])
+    ]
     audit = [{"id": a.pop("_id"), **a} for a in related(AUDIT)] if role != "viewer" else []
     return {
         "user": user,
@@ -200,7 +217,7 @@ def get_workspace(request: Request, db=Depends(get_session)):
 @inspection_router.get("/file", summary="下载查验附件")
 def download_file(file_id: str, request: Request, db=Depends(get_session)):
     user = _identity(request)
-    f = db[FILES].find_one({"_id": file_id})
+    f = db[FILES].find_one({"_id": file_id, "deleted": {"$ne": True}})
     if not f:
         raise HTTPException(status_code=404, detail="附件不存在")
     _ship(db, f["shipment_id"], user)
@@ -228,15 +245,12 @@ def upload_file(
     user = _identity(request)
     _allow(user, ("monitor", "analyst"))
     _ship(db, shipment_id, user)
-    is_monitor_file = category in MONITOR_FILES
-    if not (is_monitor_file or category in ANALYST_FILES or ROUND_FILE_RE.match(category)):
-        raise HTTPException(status_code=400, detail="无效的附件类别")
-    if (user["role"] == "monitor" and not is_monitor_file) or (user["role"] == "analyst" and is_monitor_file):
-        raise HTTPException(status_code=403, detail="附件类别无权上传")
+    _check_file_category(user, category, "上传")
     content = file.file.read(MAX_FILE_SIZE + 1)
     if not content or len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="请选择不超过15MB的文件")
 
+    name = file.filename or "附件"
     file_id = str(uuid.uuid4())
     FILE_DIR.mkdir(parents=True, exist_ok=True)
     target = blob_path(file_id)
@@ -247,11 +261,11 @@ def upload_file(
         "_id": file_id,
         "shipment_id": shipment_id,
         "category": category,
-        "name": file.filename or "附件",
+        "name": name,
         "type": file.content_type or "",
         "size": len(content),
     })
-    _log(db, shipment_id, user, "上传附件：" + category)
+    _log(db, shipment_id, user, "上传附件：" + _file_label(category, name))
     return {"ok": True}
 
 
@@ -282,10 +296,26 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         _log(db, shipment_id, user, "登记查验")
         return {"id": shipment_id}
 
-    if action not in ("station", "update", "round", "feedback", "cargo"):
+    if action not in ("station", "update", "round", "feedback", "cargo", "deleteFile"):
         raise HTTPException(status_code=400, detail="未知操作")
     s = _ship(db, str(p.get("shipmentId") or ""), user)
     data = s["data"]
+
+    if action == "deleteFile":
+        _allow(user, ("monitor", "analyst"))
+        f = db[FILES].find_one({"_id": str(p.get("fileId") or ""), "shipment_id": s["_id"], "deleted": {"$ne": True}})
+        if not f:
+            raise HTTPException(status_code=404, detail="附件不存在或已删除")
+        _check_file_category(user, f["category"], "删除")
+        # 只做标记：页面不再显示，文件留在服务器上，误删时可以恢复
+        r = db[FILES].update_one(
+            {"_id": f["_id"], "deleted": {"$ne": True}},
+            {"$set": {"deleted": True, "deleted_by": user["username"], "deleted_at": _now()}},
+        )
+        if not r.modified_count:
+            raise HTTPException(status_code=404, detail="附件不存在或已删除")
+        _log(db, s["_id"], user, "删除附件：" + _file_label(f["category"], f["name"]))
+        return {"ok": True}
 
     if action == "station":
         _allow(user, ("monitor",))

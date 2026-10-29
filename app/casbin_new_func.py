@@ -14,11 +14,10 @@ class FilterCondition:
 class CasbinPolicyFilter:
     """Casbin MongoDB 多字段过滤器 - 支持角色继承和管理员权限"""
 
-    def __init__(self, database: Database, admin_role: str = "admin_role"):
+    def __init__(self, database: Database):
         # 复用 db_mongo 中已建立的连接，不再单独创建 MongoClient
         self.db = database
         self.collection: Collection = self.db['casbin_rule']
-        self.admin_role = admin_role
 
     # -----------------------------
     # 工具方法
@@ -84,15 +83,11 @@ class CasbinPolicyFilter:
 
     def is_admin(self, user_id: str) -> bool:
         """
-        检查用户是否是管理员（是否拥有 admin_role，且该角色未被禁用）
+        检查用户是否是管理员：admin 账号，或拥有 admin 角色（含继承，跳过被禁用的角色）。
+        与 app.auth_utils.is_admin_user 一致（这里不能直接引用它：db_mongo 创建本类时 auth_utils 还没加载）。
+        原来只认直接挂在 admin_role 上的用户，与中间件、菜单等处的管理员判断不一致
         """
-        if self.admin_role in self._disabled_roles():
-            return False
-        admin_role_doc = self.collection.find_one(
-            {'ptype': 'g', 'v0': user_id, 'v1': self.admin_role},
-            {'_id': 1},
-        )
-        return admin_role_doc is not None
+        return user_id == "admin" or "admin" in self.get_user_roles(user_id)
 
     def get_user_roles(self, user_id: str) -> List[str]:
         """
@@ -128,7 +123,7 @@ class CasbinPolicyFilter:
         """
         获取符合条件的 policies
 
-        - 管理员(admin_role)：
+        - 管理员（admin 账号或拥有 admin 角色）：
           忽略 v0，仅按其余条件过滤 p 记录；
           最终只返回唯一 v1 的列表，且每项 v3=[]。
 
@@ -175,7 +170,7 @@ class CasbinPolicyFilter:
         """
         高级过滤接口（支持分页、排序、继承和管理员权限）
 
-        - 管理员(admin_role)：
+        - 管理员（admin 账号或拥有 admin 角色）：
           忽略 v0，仅按其余条件过滤 p 记录；
           再将结果折叠为唯一 v1（每项 v3=[]），
           然后对折叠结果按 v1 排序（如果 sort_by == 'v1'），再分页。
@@ -213,11 +208,9 @@ class CasbinPolicyFilter:
                         'data': data
                     }
 
-                # 非管理员：一次查询取回所有角色的策略
-                all_roles = self.get_user_roles(user_id)
-                if not all_roles:
-                    return {'total': 0, 'skip': skip, 'limit': limit, 'data': []}
-                query = self._roles_query(conditions, all_roles)
+                # 非管理员：一次查询取回直接授予该用户的策略和所有角色的策略
+                # （原来只查角色，直接授予用户本人的规则查不到）
+                query = self._roles_query(conditions, [user_id, *self.get_user_roles(user_id)])
 
         total = self.collection.count_documents(query)
         cursor = self.collection.find(query, {'_id': 0})

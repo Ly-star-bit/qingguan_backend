@@ -356,7 +356,7 @@ async def set_system_forbidden(
     """设置系统封禁状态"""
     # 检查是否为admin用户
     user = request.state.user
-    if user.get("sub") != "admin":
+    if not is_admin_user(user.get("sub")):
         raise HTTPException(status_code=403, detail="只有管理员可以操作此接口")
 
     db = session

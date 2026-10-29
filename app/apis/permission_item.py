@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import Dict, List, Optional
-from app.auth_utils import ensure_self_or_admin
+from app.auth_utils import ensure_self_or_admin, is_admin_user
 from app.db_mongo import get_session, enforcer
 from pydantic import BaseModel
 
@@ -265,8 +265,8 @@ async def get_user_menu_permissions_fixed(username: str, request: Request, sessi
     if not db.users.find_one({"username": username}, {"_id": 1}):
         raise HTTPException(status_code=404, detail="用户未找到")
 
-    # 如果是admin用户，直接返回全部权限
-    if username == "admin":
+    # 管理员（admin 账号或拥有 admin 角色）直接返回全部权限
+    if is_admin_user(username):
         return [
             {"category": "空运", "routes": all_country},
             {"category": "海运", "routes": all_country}

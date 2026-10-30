@@ -65,20 +65,29 @@ class UserLogin(BaseModel):
 user_router = APIRouter(tags=["user"])
 
 
+def check_password(user_db: Optional[dict], password: str) -> bool:
+    """账号存在且密码正确"""
+    return bool(user_db) and bcrypt.checkpw(
+        password.encode("utf-8"), user_db["password"].encode("utf-8")
+    )
+
+
 @user_router.post("/login", summary="用户登录，获取访问和刷新令牌")
 def login_for_access_token(
     request: Request, user: UserLogin, session: MongoClient = Depends(get_session)
 ):
     db = session
     user_db = db.users.find_one({"username": user.username})
-    if not user_db or not bcrypt.checkpw(
-        user.password.encode("utf-8"), user_db["password"].encode("utf-8")
-    ):
+    if not check_password(user_db, user.password):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     if user_db.get("status", 1) == 0:
         # 前端登录页对 403 会直接显示 detail
         raise HTTPException(status_code=403, detail="账号已被禁用，请联系管理员")
+    return issue_login_tokens(db, user_db, request)
 
+
+def issue_login_tokens(db, user_db: dict, request: Request) -> dict:
+    """签发登录令牌并记录登录时间和 IP：账号密码登录和统一认证登录共用"""
     access_token_expires = timedelta(hours=3)
     access_token = create_access_token(
         data={

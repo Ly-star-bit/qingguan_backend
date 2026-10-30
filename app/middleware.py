@@ -76,6 +76,8 @@ EXCLUDED_PATHS = {
     "/api/process_excel_usp_data/",
     "/api/refresh/",
     "/api/17track/notify/",
+    # 统一认证登录：换到本系统令牌之前还没有令牌
+    "/api/oidc/*",
 }
 
 # 只校验登录、不走 Casbin 的接口：所有登录用户都需要调用，

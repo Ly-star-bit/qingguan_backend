@@ -29,6 +29,7 @@ from app.apis.excel_preview import mount_static_files
 from app.apis.excel_preview import router as excel_preview_router
 from app.apis.menu import menu_router
 from app.apis.user import user_router
+from app.apis.oidc import oidc_router
 from app.apis.role import role_router
 from app.cargo_tracking_data.apis.cargo_tracking import cargo_tracking_router
 from app.dadan.apis.order import order_router
@@ -124,6 +125,7 @@ async def lifespan(app: FastAPI):
 # 定义FastAPI应用
 app = FastAPI(lifespan=lifespan, redirect_slashes=True)
 app.include_router(user_router, prefix="/api")
+app.include_router(oidc_router, prefix="/api")
 app.include_router(role_router, prefix="/api")
 
 # app.include_router(web_vba_router)

@@ -30,6 +30,7 @@ from app.apis.excel_preview import router as excel_preview_router
 from app.apis.menu import menu_router
 from app.apis.user import user_router
 from app.apis.oidc import oidc_router
+from app.oidc_events import start_identity_events, stop_identity_events
 from app.apis.role import role_router
 from app.cargo_tracking_data.apis.cargo_tracking import cargo_tracking_router
 from app.dadan.apis.order import order_router
@@ -115,7 +116,10 @@ task_logger.add(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # scheduler.start()
+    # 统一认证中心的离职停用等事件（未配置 OIDC_EVENTS_HOST 时不订阅）
+    start_identity_events()
     yield
+    stop_identity_events()
     # if jpype.isJVMStarted():
     #     jpype.shutdownJVM()
 

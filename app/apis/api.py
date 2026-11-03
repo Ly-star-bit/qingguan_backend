@@ -7,6 +7,7 @@ from bson import ObjectId
 from app.permission_core import norm_path, parse_object_id
 from pydantic import BaseModel
 from app.db_mongo import enforcer
+from app.auth_utils import grants_admin
 # 定义API端点模型
 class ApiEndpoint(BaseModel):
     id: Optional[str] = None
@@ -19,10 +20,24 @@ class ApiEndpoint(BaseModel):
 
 api_router = APIRouter(tags=["api_endpoints"])
 
+
+def _ensure_rbac_safe(endpoint: ApiEndpoint) -> None:
+    """
+    RBAC 类型会写入 g(Path, ApiGroup)：Path 填用户名时，该用户直接继承 ApiGroup 的权限，
+    分组填管理员角色就能把任何人设为管理员。只允许接口路径，分组不能是（或继承了）管理员角色
+    """
+    if endpoint.Type != "RBAC":
+        return
+    if not endpoint.Path.startswith("/"):
+        raise HTTPException(status_code=400, detail="RBAC 类型的 Path 必须是以 / 开头的接口路径")
+    if grants_admin(endpoint.ApiGroup):
+        raise HTTPException(status_code=400, detail="RBAC 类型的分组不能是管理员角色")
+
 @api_router.post("/api_endpoints", summary="创建API端点")
 async def create_api_endpoint(endpoint: ApiEndpoint, session = Depends(get_session)):
     """创建API端点"""
     db = session
+    _ensure_rbac_safe(endpoint)
     endpoint_dict = endpoint.dict(exclude_unset=True)
     if "id" in endpoint_dict:
         del endpoint_dict["id"]
@@ -65,6 +80,7 @@ async def update_api_endpoint(endpoint_id: str, endpoint: ApiEndpoint, session =
     """更新API端点"""
     db = session
     endpoint_oid = parse_object_id(endpoint_id, "API端点ID")
+    _ensure_rbac_safe(endpoint)
 
     # 获取旧的端点信息
     old_endpoint_data = db.api_endpoints.find_one({"_id": endpoint_oid})

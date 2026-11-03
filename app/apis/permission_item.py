@@ -268,7 +268,7 @@ async def get_user_menu_permissions_fixed(username: str, request: Request, sessi
     if not db.users.find_one({"username": username}, {"_id": 1}):
         raise HTTPException(status_code=404, detail="用户未找到")
 
-    # 管理员（admin 账号或拥有 admin 角色）直接返回全部权限
+    # 管理员（admin 账号或拥有管理员角色 admin_role）直接返回全部权限
     if is_admin_user(username):
         return [
             {"category": "空运", "routes": all_country},

@@ -188,7 +188,7 @@ class AccessTokenAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "无法验证令牌"}
             )
 
-        # admin 账号或拥有 admin 角色的用户跳过 Casbin（与菜单、用户管理等处的管理员判断一致）
+        # admin 账号或拥有管理员角色 admin_role 的用户跳过 Casbin（与菜单、用户管理等处的管理员判断一致）
         if not is_admin_user(subject) and path not in AUTH_ONLY_PATHS:
             if is_system_forbidden():
                 return JSONResponse(

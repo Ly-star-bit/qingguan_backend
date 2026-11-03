@@ -95,6 +95,8 @@ def issue_login_tokens(db, user_db: dict, request: Request) -> dict:
             # 权限以服务端 Casbin 为准，不再把全部策略塞进 token；保留空数组兼容前端解析
             "permissions": [],
             "menu_ids": user_db.get("menu_ids", []),
+            # 只用于前端显示管理员专用的按钮，接口权限仍由服务端判断
+            "is_admin": is_admin_user(user_db["username"]),
             **session_claims(user_db),
         },
         expires_delta=access_token_expires,
@@ -141,6 +143,7 @@ def refresh_token(
                 "sub": username,
                 "permissions": [],
                 "menu_ids": user_db.get("menu_ids", []),
+                "is_admin": is_admin_user(username),
                 **session_claims(user_db),
             },
             expires_delta=access_token_expires,
@@ -198,7 +201,7 @@ def update_user(
     old_name = user_db["username"]
     caller = (getattr(request.state, "user", None) or {}).get("sub")
     # admin 账号在中间件里跳过所有权限检查，修改它始终要原始密码，
-    # 否则拥有 admin 角色的其他用户可以直接改掉它的密码并接管
+    # 否则拥有管理员角色的其他用户可以直接改掉它的密码并接管
     admin_editing_other = caller != old_name and old_name != "admin" and is_admin_user(caller)
     if not old_password and not admin_editing_other:
         raise HTTPException(status_code=400, detail="请输入原始密码（只有管理员修改其他用户时可以不填）")
@@ -263,7 +266,7 @@ def read_users(
     current = getattr(context_request.state, "user", None) or {}
     user = current.get("sub")
 
-    if user != "admin":
+    if not is_admin_user(user):
         query = {"username": {"$ne": "admin"}}
     else:
         query = {}
@@ -300,7 +303,7 @@ def read_user(user_id: str, session: MongoClient = Depends(get_session)):
 def _ensure_can_manage(request: Request, target: dict, action: str) -> None:
     """
     重置密码、删除账号的保护：admin 账号在中间件里跳过所有权限检查，不允许被这两个操作接管或删除；
-    拥有 admin 角色的账号只能由管理员操作；不能删除自己
+    拥有管理员角色的账号只能由管理员操作；不能删除自己
     """
     caller = (getattr(request.state, "user", None) or {}).get("sub")
     name = target["username"]

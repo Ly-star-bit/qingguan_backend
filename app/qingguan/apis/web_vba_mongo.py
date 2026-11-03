@@ -77,6 +77,7 @@ from app.utils_aspose import (
 )
 from rpa_tools import find_playwright_node_path
 from rpa_tools.email_tools import send_email
+from app.auth_utils import is_admin_user
 from app.db_mongo import get_session
 
 # logger.level("ALERT", no=35, color="<red>")
@@ -2356,8 +2357,9 @@ def read_summaries(
             else:
                 query["lock"] = lock
 
+        # 锁定的记录只有管理员能看到
         user = context_request.state.user["sub"]
-        if user != "admin":
+        if not is_admin_user(user):
             query["$and"].append(
                     {"$or": [
                         {"lock": False},

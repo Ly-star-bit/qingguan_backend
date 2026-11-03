@@ -4,10 +4,12 @@ import casbin
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from contextlib import contextmanager
+from datetime import datetime
 from casbin_pymongo_adapter import Adapter
 
 from app.casbin_new_func import CasbinPolicyFilter
 from app.casbin_role_manager import StatusAwareRoleManager
+from app.permission_core import ADMIN_ROLE
 
 # 加载环境变量
 load_dotenv()
@@ -126,6 +128,19 @@ def refresh_disabled_roles() -> None:
 
 
 refresh_disabled_roles()
+
+# 管理员角色要在 roles 集合里，才会出现在「用户 → 角色继承」的列表中；已有时不改动
+db.roles.update_one(
+    {"role_name": ADMIN_ROLE},
+    {"$setOnInsert": {
+        "description": "管理员：跳过接口权限检查，拥有全部菜单和管理功能",
+        "permissions": [],
+        "status": 1,
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }},
+    upsert=True,
+)
 
 # 为 casbin_rule 集合添加唯一索引，防止完全相同策略重复插入
 try:

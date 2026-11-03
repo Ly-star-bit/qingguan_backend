@@ -26,6 +26,7 @@ from app.utils import (
     output_custom_clear_history_log,
 )
 
+from app.auth_utils import is_admin_user
 from app.db_mongo import get_session
 from pydantic import BaseModel
 class OutputSelectedLogRequest(BaseModel):
@@ -461,8 +462,9 @@ def read_summaries(
             else:
                 query["lock"] = lock
 
+        # 锁定的记录只有管理员能看到
         user = context_request.state.user["sub"]
-        if user != "admin":
+        if not is_admin_user(user):
             query["$and"].append(
                     {"$or": [
                         {"lock": False},

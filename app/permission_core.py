@@ -24,6 +24,11 @@ except ImportError:  # 不同版本的 pycasbin 可能没有这个私有函数
     _extract_tokens = None
 
 
+# 管理员角色：admin 账号或拥有该角色（含继承）的用户视为管理员，见 app.auth_utils.is_admin_user。
+# 线上 admin 账号挂的就是这个角色（规则 /* * allow）
+ADMIN_ROLE = "admin_role"
+
+
 # -----------------------------
 # 通用
 # -----------------------------

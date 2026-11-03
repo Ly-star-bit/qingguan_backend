@@ -8,6 +8,7 @@ from fastapi import (
 from loguru import logger
 
 from app.db_mongo import enforcer
+from app.auth_utils import is_admin_user
 
 async def require_products_permission(
     request: Request,
@@ -36,8 +37,8 @@ async def require_products_permission(
     logger.info(f"require_products_permission - obj: {obj}, act: {act}")
 
     env = {"startland": startland, "destination": destination}
-    # 根据你的模型：(sub, obj, act, attrs) 进行 ABAC 鉴权
-    allowed = enforcer.enforce(subject, obj, act, env)
+    # 管理员与中间件一致直接放行（不依赖管理员角色上的 /* 规则）；其他人按 (sub, obj, act, attrs) 进行 ABAC 鉴权
+    allowed = is_admin_user(subject) or enforcer.enforce(subject, obj, act, env)
     print(f"是否允许:{allowed}")
     if not allowed:
         raise HTTPException(

@@ -5,7 +5,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from app.db_mongo import db, enforcer, filter_service  # 确保已注册 satisfies 函数
 
-from app.auth_utils import is_admin_user
+from app.auth_utils import grants_admin, is_admin_user
 from app.permission_core import (
     dump_attrs,
     ensure_rule_loadable,
@@ -197,6 +197,18 @@ async def get_user_policies(username: str):
     return _implicit_policies(username)
 
 
+def _ensure_can_change_admin_role(group: Group, request: Request, action: str) -> None:
+    """
+    管理员角色只能由管理员分配或移除。被挂上的也可以是角色（该角色的成员都会成为管理员），
+    所以继承了管理员角色的角色同样只能由管理员分配
+    """
+    if not grants_admin(group.group):
+        return
+    caller = (getattr(request.state, "user", None) or {}).get("sub")
+    if not is_admin_user(caller):
+        raise HTTPException(status_code=403, detail=f"只有管理员可以{action}管理员角色")
+
+
 @policy_router.post("/policies/groups")
 async def add_group(group: Group, request: Request):
     """添加用户组 g(user, role, desc)"""
@@ -205,12 +217,9 @@ async def add_group(group: Group, request: Request):
     if group.user == group.group:
         raise HTTPException(status_code=400, detail="用户名和角色名不能相同")
     # 原来不校验：可以把用户挂到另一个用户名下（继承对方直接授予的全部权限），
-    # 或挂到 admin 角色上（is_admin_user 视为管理员）
-    if group.group == "admin":
-        caller = (getattr(request.state, "user", None) or {}).get("sub")
-        if not is_admin_user(caller):
-            raise HTTPException(status_code=403, detail="只有管理员可以分配 admin 角色")
-    elif not db.roles.find_one({"role_name": group.group}, {"_id": 1}):
+    # 或自己挂到管理员角色上
+    _ensure_can_change_admin_role(group, request, "分配")
+    if not db.roles.find_one({"role_name": group.group}, {"_id": 1}):
         raise HTTPException(status_code=400, detail=f"角色 {group.group} 不存在，请先在「角色管理」中创建")
     if not (db.users.find_one({"username": group.user}, {"_id": 1})
             or db.roles.find_one({"role_name": group.user}, {"_id": 1})):
@@ -224,8 +233,12 @@ async def add_group(group: Group, request: Request):
         raise HTTPException(status_code=400, detail="组已存在或无法添加")
 
 @policy_router.delete("/policies/groups")
-async def remove_group(group: Group):
+async def remove_group(group: Group, request: Request):
     """删除用户组：按 (user, role) 删除，不要求描述一致（添加时会自动生成描述）"""
+    # 按字段过滤删除时空字符串匹配任意值：{user: "x", group: ""} 会删掉 x 的全部角色（包括管理员角色）
+    if not group.user or not group.group:
+        raise HTTPException(status_code=400, detail="用户和角色都不能为空")
+    _ensure_can_change_admin_role(group, request, "移除")
     if enforcer.remove_filtered_named_grouping_policy("g", 0, group.user, group.group):
         enforcer.load_policy()
         return {"message": "组删除成功"}

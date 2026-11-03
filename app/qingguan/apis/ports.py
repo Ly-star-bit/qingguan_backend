@@ -18,6 +18,7 @@ from fastapi.encoders import jsonable_encoder
 
 
 from app.db_mongo import _as_list, get_session,enforcer, norm_key
+from app.permission_core import ADMIN_ROLE
 from casbin import util
 
 def get_forbidden_fields_optimized(e, user: str, obj: str, act: str, fields: List[str]) -> List[str]:
@@ -31,7 +32,7 @@ def get_forbidden_fields_optimized(e, user: str, obj: str, act: str, fields: Lis
     except Exception:
         roles = set()
     
-    if user == "admin" or "admin" in roles:
+    if user == "admin" or ADMIN_ROLE in roles:
         return []
     
     try:

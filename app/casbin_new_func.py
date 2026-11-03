@@ -4,6 +4,8 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 from dataclasses import dataclass
 
+from app.permission_core import ADMIN_ROLE
+
 @dataclass
 class FilterCondition:
     """过滤条件"""
@@ -83,11 +85,10 @@ class CasbinPolicyFilter:
 
     def is_admin(self, user_id: str) -> bool:
         """
-        检查用户是否是管理员：admin 账号，或拥有 admin 角色（含继承，跳过被禁用的角色）。
-        与 app.auth_utils.is_admin_user 一致（这里不能直接引用它：db_mongo 创建本类时 auth_utils 还没加载）。
-        原来只认直接挂在 admin_role 上的用户，与中间件、菜单等处的管理员判断不一致
+        检查用户是否是管理员：admin 账号，或拥有管理员角色 admin_role（含继承，跳过被禁用的角色）。
+        与 app.auth_utils.is_admin_user 一致（这里不能直接引用它：db_mongo 创建本类时 auth_utils 还没加载）
         """
-        return user_id == "admin" or "admin" in self.get_user_roles(user_id)
+        return user_id == "admin" or ADMIN_ROLE in self.get_user_roles(user_id)
 
     def get_user_roles(self, user_id: str) -> List[str]:
         """
@@ -123,7 +124,7 @@ class CasbinPolicyFilter:
         """
         获取符合条件的 policies
 
-        - 管理员（admin 账号或拥有 admin 角色）：
+        - 管理员（admin 账号或拥有管理员角色 admin_role）：
           忽略 v0，仅按其余条件过滤 p 记录；
           最终只返回唯一 v1 的列表，且每项 v3=[]。
 
@@ -170,7 +171,7 @@ class CasbinPolicyFilter:
         """
         高级过滤接口（支持分页、排序、继承和管理员权限）
 
-        - 管理员（admin 账号或拥有 admin 角色）：
+        - 管理员（admin 账号或拥有管理员角色 admin_role）：
           忽略 v0，仅按其余条件过滤 p 记录；
           再将结果折叠为唯一 v1（每项 v3=[]），
           然后对折叠结果按 v1 排序（如果 sort_by == 'v1'），再分页。

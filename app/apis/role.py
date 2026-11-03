@@ -6,8 +6,9 @@ from typing import List, Optional
 import jwt
 from pymongo import MongoClient
 from app.db_mongo import get_session, enforcer, refresh_disabled_roles
+from app.auth_utils import grants_admin, is_admin_user
 from app.casbin_subjects import ensure_role_name_available, rename_subject_in_casbin
-from app.permission_core import parse_object_id, validate_name
+from app.permission_core import ADMIN_ROLE, parse_object_id, validate_name
 from pydantic import BaseModel
 from passlib.context import CryptContext
 from datetime import datetime
@@ -57,6 +58,13 @@ def _remove_role_from_casbin(role_name: str) -> None:
     enforcer.remove_filtered_policy(0, role_name)
     enforcer.remove_filtered_grouping_policy(1, role_name)
     enforcer.remove_filtered_grouping_policy(0, role_name)
+
+
+def _ensure_admin_for_admin_grant(request: Request, role_name: str, action: str) -> None:
+    """继承了管理员角色的角色：禁用、启用、删除都会改变谁是管理员，只能由管理员操作"""
+    caller = (getattr(request.state, "user", None) or {}).get("sub")
+    if grants_admin(role_name) and not is_admin_user(caller):
+        raise HTTPException(status_code=403, detail=f"该角色继承了管理员角色，只有管理员可以{action}")
 
 
 @role_router.post("/roles/", response_model=Role, summary="创建新角色")
@@ -141,6 +149,7 @@ def read_role(role_id: str, session: MongoClient = Depends(get_session)):
 def update_role(
     role_id: str,
     role_update: RoleUpdate,
+    request: Request,
     session: MongoClient = Depends(get_session),
 ):
     """
@@ -156,6 +165,11 @@ def update_role(
     old_name = existing_role.get("role_name")
     renamed = role_update.role_name is not None and role_update.role_name != old_name
     _validate_status(role_update.status)
+    # 按角色名识别管理员：改名后原来的管理员全部失效，禁用后角色管理器会跳过它
+    if old_name == ADMIN_ROLE and (renamed or role_update.status == 0):
+        raise HTTPException(status_code=400, detail="管理员角色不能改名或禁用")
+    if role_update.status is not None and role_update.status != existing_role.get("status", 1):
+        _ensure_admin_for_admin_grant(request, old_name, "启用或禁用")
     if renamed:
         validate_name(role_update.role_name, "角色名")
         if db.roles.find_one({"role_name": role_update.role_name, "_id": {"$ne": role_oid}}):
@@ -196,7 +210,7 @@ def update_role(
 
 
 @role_router.delete("/roles/{role_id}/", summary="删除指定角色")
-def delete_role(role_id: str, session: MongoClient = Depends(get_session)):
+def delete_role(role_id: str, request: Request, session: MongoClient = Depends(get_session)):
     """
     删除指定角色
     """
@@ -205,6 +219,9 @@ def delete_role(role_id: str, session: MongoClient = Depends(get_session)):
     role = db.roles.find_one({"_id": role_oid})
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
+    if role["role_name"] == ADMIN_ROLE:
+        raise HTTPException(status_code=400, detail="管理员角色不能删除")
+    _ensure_admin_for_admin_grant(request, role["role_name"], "删除")
 
     # 删除角色相关的 Casbin 数据（原来用 3 个字段删除 6 字段的规则，永远匹配不上）
     _remove_role_from_casbin(role["role_name"])

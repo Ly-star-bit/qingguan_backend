@@ -41,29 +41,46 @@ SYSTEM_ROLES = {
     "inspection_analyst": "analyst",
     "inspection_viewer": "viewer",
 }
+# 以下字段、附件类别和校验规则与 HUBS V2（2026-11-03）一致
 MONITOR_FIELDS = (
     "port", "noticeDate", "stationDate", "stationPlanDate", "stationPlanPeriod", "stationPeriod",
-    "firstResult", "status", "releaseDate", "resultDate", "applicationDate", "approved",
-    "returnFlight", "returnMawb", "etd", "eta", "departed",
+    "pickupConfirmed", "releasedPickupDate", "openedCartons", "warehouseNotes",
+    "applicationDate", "approved", "returnFlight", "returnMawb", "etd", "eta", "departed",
 )
 ANALYST_FIELDS = (
     "description", "sensitive", "exportSummary", "customerMix", "updatedFiles", "fileNotes",
-    "ior", "structure", "declarationIssue", "declarationNotes", "cbpOfficer",
+    "ior", "structure", "declarationIssue", "declarationNotes", "declarationStatus",
+    "inspectionType", "inspectionTypeOther", "preprocessComplete",
+    "firstResult", "resultDate", "resultNotes", "officer",
 )
+# 只有 owner 能直接改状态，用来纠正误放行、误退运（HUBS V2 没有这个入口）
+OWNER_FIELDS = ("status", "releaseDate", "pickupDate")
 CORE_FIELDS = (
     "port", "noticeDate", "stationDate", "stationPlanDate", "stationPlanPeriod", "stationPeriod",
     "firstResult", "status", "releaseDate", "resultDate",
+    "publicProgress", "publicRound", "publicPlan", "publicFeedback", "approved", "hasFirstFeedback",
 )
-MONITOR_FILES = ("查验截图", "第一轮结果截屏", "7512文件")
+BOOL_FIELDS = ("pickupConfirmed", "approved", "departed", "sensitive", "updatedFiles", "preprocessComplete")
+MONITOR_FILES = ("查验截图", "7512文件", "回仓照片")
+# 登记角色还能查看查验结果附件
+MONITOR_READ_FILES = (*MONITOR_FILES, "第一轮结果截屏", "结果文件")
 VIEWER_FILES = ("查验截图", "第一轮结果截屏")
-# 对应文件的旧类别由 migrate_file_categories 换成新类别
-ANALYST_FILES = ("主单", "分单", "仓单", "Segregation", "发票", "其它", "相关预报文件")
-ROUND_FILE_RE = re.compile(r"^轮次:[^:]+:(提交|反馈)$")
-STATUSES = ("在查", "已放行", "安排退运")
-# 处理轮次的 CBP 反馈结果与应对方案：放行 → 已放行；新要求 → 选应对方案；申请退运 → 安排退运；继续 → 才能新增下一轮
-FEEDBACK_RESULTS = ("放行", "新要求")
-PLANS = ("申请退运", "继续")
-FIRST_RESULTS = ("待反馈", "放行", "要求更新文件", "RTME 扣留", "其他扣留")
+# 处理角色的附件类别。后一行是旧类别：页面上并入新类别显示（分单、仓单 → 分单及仓单，出口资料汇总 → 发票，
+# 第一轮结果截屏 → 结果文件，其它 → 更新后的发票及补充文件），不再上传新文件，已有文件照常查看和删除
+ANALYST_FILES = (
+    "主单", "分单及仓单", "发票", "Segregation", "相关预报文件", "更新后的发票及补充文件", "结果文件",
+    "分单", "仓单", "出口资料汇总", "整理完的出口资料", "第一轮结果截屏", "其它",
+)
+# 预处理勾选「调整文件」后，必须先上传的更新文件
+UPDATE_FILES = ("更新后的发票及补充文件", "其它")
+RESULT_FILES = ("结果文件", "第一轮结果截屏")
+ROUND_FILE_RE = re.compile(r"^轮次:([^:]+):(提交|反馈)$")
+STATUSES = ("在查", "申请退运", "安排退运", "已放行")
+FEEDBACK_RESULTS = ("", "放行", "提出新要求")
+FIRST_RESULTS = ("待反馈", "放行", "要求更新货值", "要求更新文件", "要求补充文件", "RTME 扣留", "其他扣留", "其他")
+DECLARATION_STATUSES = ("已申报", "未申报", "未知")
+INSPECTION_TYPES = ("舱单查验", "申报查验", "放行后查验", "不明", "其他")
+OPENED_CARTONS = ("1–5箱", "6–10箱", "11–20箱", "21箱及以上")
 PERIODS = ("", "上午", "下午")
 
 try:
@@ -131,13 +148,13 @@ def _check_file_category(user: Dict[str, str], category: str, verb: str) -> None
 def _file_label(category: str, name: str) -> str:
     """操作记录里的附件描述；轮次附件的类别带轮次 ID，换成可读的名称"""
     m = ROUND_FILE_RE.match(category)
-    return f"{'轮次' + m.group(1) + '附件' if m else category} · {name}"
+    return f"{'轮次' + m.group(2) + '附件' if m else category} · {name}"
 
 
 def _feedback_result(rnd: Dict[str, Any]) -> str:
-    """反馈结果；「新要求」最初叫「继续」，旧记录按新名称处理"""
+    """反馈结果；「提出新要求」以前叫「继续」「新要求」，旧记录按新名称处理"""
     value = rnd.get("feedbackResult") or ""
-    return "新要求" if value == "继续" else value
+    return "提出新要求" if value in ("继续", "新要求") else value
 
 
 def _rounds_of(db, shipment_id: str) -> list:
@@ -145,12 +162,22 @@ def _rounds_of(db, shipment_id: str) -> list:
     return list(db[ROUNDS].find({"shipment_id": shipment_id}).sort([("created", 1), ("_id", 1)]))
 
 
+def _check_round_file(db, s: Dict[str, Any], category: str) -> None:
+    """轮次附件只能加到、删自在查货物的最新一轮，历史轮次锁定"""
+    m = ROUND_FILE_RE.match(category)
+    if not m:
+        return
+    rounds = _rounds_of(db, s["_id"])
+    if not any(r["_id"] == m.group(1) for r in rounds):
+        raise HTTPException(status_code=400, detail="处理轮次不存在")
+    if s["data"].get("status") != "在查" or rounds[-1]["_id"] != m.group(1):
+        raise HTTPException(status_code=400, detail="历史轮次已锁定")
+
+
 def _ship(db, shipment_id: str, user: Dict[str, str]) -> Dict[str, Any]:
     s = db[SHIPMENTS].find_one({"_id": shipment_id})
     if not s:
         raise HTTPException(status_code=404, detail="未找到货物")
-    if user["role"] == "viewer" and s["data"].get("status") != "在查":
-        raise HTTPException(status_code=403, detail="该货物不在查询范围内")
     return s
 
 
@@ -158,7 +185,7 @@ def _can_read_file(role: str, category: str) -> bool:
     if role == "viewer":
         return category in VIEWER_FILES
     if role == "monitor":
-        return category in MONITOR_FILES
+        return category in MONITOR_READ_FILES
     return True
 
 
@@ -190,32 +217,54 @@ def _save_shipment(db, s: Dict[str, Any], revision: Any, data: Dict[str, Any]) -
 def get_workspace(request: Request, db=Depends(get_session)):
     user = _identity(request)
     role = user["role"]
-    shipments = [
-        s for s in db[SHIPMENTS].find().sort("updated", -1)
-        if role != "viewer" or s["data"].get("status") == "在查"
-    ]
+    shipments = list(db[SHIPMENTS].find().sort("updated", -1))
     ids = [s["_id"] for s in shipments]
 
     def related(col: str):
         return list(db[col].find({"shipment_id": {"$in": ids}}))
 
+    all_rounds = sorted(
+        (
+            {"id": r.pop("_id"), "shipmentId": r.pop("shipment_id"), **r,
+             "feedbackResult": _feedback_result(r), "revision": r.get("revision") or 1}
+            for r in related(ROUNDS)
+        ),
+        key=lambda r: (r.get("created") or "", r["id"]),
+    )
+    rounds_by: Dict[str, list] = {}
+    for r in all_rounds:
+        rounds_by.setdefault(r["shipmentId"], []).append(r)
+    all_files = [f for f in related(FILES) if not f.get("deleted")]
+    with_result_files = {f["shipment_id"] for f in all_files if f["category"] in RESULT_FILES}
+
     def shipment_out(s):
-        d = s["data"]
+        d = dict(s["data"])
+        # 旧版字段名 cbpOfficer
+        if "officer" not in d and d.get("cbpOfficer"):
+            d["officer"] = d["cbpOfficer"]
+        rs = rounds_by.get(s["_id"], [])
+        last = rs[-1] if rs else None
+        # 登记、只读角色拿不到轮次明细，进度由最新一轮算出（HUBS V2 写在货物记录里，这里实时计算，避免两边不一致）
+        d.update({
+            "publicRound": len(rs),
+            "publicPlan": last["measure"] if last else "",
+            "publicFeedback": "：".join(x for x in (last["feedbackResult"], last.get("feedback") or "") if x) if last else "",
+            "publicProgress": "沟通处理中" if rs else "",
+            "hasFirstFeedback": bool(
+                (d.get("firstResult") and d["firstResult"] != "待反馈") or d.get("resultDate") or d.get("resultNotes")
+                or rs or s["_id"] in with_result_files
+            ),
+        })
         if role == "viewer":
             d = {k: d[k] for k in CORE_FIELDS if k in d}
         elif role == "monitor":
-            d = {k: d[k] for k in MONITOR_FIELDS if k in d}
+            d = {k: d[k] for k in (*MONITOR_FIELDS, *CORE_FIELDS) if k in d}
         return {"id": s["_id"], "mawb": s["mawb"], "revision": s["revision"], "updated": s["updated"], **d}
 
     full = role in ("owner", "analyst")
-    rounds = [
-        {"id": r.pop("_id"), "shipmentId": r.pop("shipment_id"), **r, "feedbackResult": _feedback_result(r)}
-        for r in related(ROUNDS)
-    ] if full else []
+    rounds = all_rounds if full else []
     cargo = [{"id": c.pop("_id"), **c} for c in related(CARGO)] if full else []
-    files = [
-        {"id": f.pop("_id"), **f} for f in related(FILES) if not f.get("deleted") and _can_read_file(role, f["category"])
-    ]
+    files = [{"id": f.pop("_id"), **f} for f in all_files if _can_read_file(role, f["category"])]
     audit = [{"id": a.pop("_id"), **a} for a in related(AUDIT)] if role != "viewer" else []
     return {
         "user": user,
@@ -257,8 +306,9 @@ def upload_file(
 ):
     user = _identity(request)
     _allow(user, ("monitor", "analyst"))
-    _ship(db, shipment_id, user)
+    s = _ship(db, shipment_id, user)
     _check_file_category(user, category, "上传")
+    _check_round_file(db, s, category)
     content = file.file.read(MAX_FILE_SIZE + 1)
     if not content or len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="请选择不超过15MB的文件")
@@ -309,7 +359,7 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         _log(db, shipment_id, user, "登记查验")
         return {"id": shipment_id}
 
-    if action not in ("station", "update", "round", "feedback", "plan", "cargo", "deleteFile"):
+    if action not in ("station", "update", "returnApply", "round", "feedback", "cargo", "deleteFile"):
         raise HTTPException(status_code=400, detail="未知操作")
     s = _ship(db, str(p.get("shipmentId") or ""), user)
     data = s["data"]
@@ -320,6 +370,7 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         if not f:
             raise HTTPException(status_code=404, detail="附件不存在或已删除")
         _check_file_category(user, f["category"], "删除")
+        _check_round_file(db, s, f["category"])
         # 只做标记：页面不再显示，文件留在服务器上，误删时可以恢复
         r = db[FILES].update_one(
             {"_id": f["_id"], "deleted": {"$ne": True}},
@@ -359,13 +410,15 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         if not isinstance(fields, dict) or not fields:
             raise HTTPException(status_code=400, detail="没有需要保存的内容")
         if user["role"] == "owner":
-            allowed = (*MONITOR_FIELDS, *ANALYST_FIELDS, "pickupDate")
+            allowed = (*MONITOR_FIELDS, *ANALYST_FIELDS, *OWNER_FIELDS)
         else:
             allowed = MONITOR_FIELDS if user["role"] == "monitor" else ANALYST_FIELDS
         bad = next((k for k in fields if k not in allowed), None)
         if bad:
             raise HTTPException(status_code=403, detail="无权修改字段：" + bad)
         for k, v in fields.items():
+            if k in BOOL_FIELDS and not isinstance(v, bool):
+                raise HTTPException(status_code=400, detail="勾选字段内容无效")
             if not isinstance(v, (str, bool)):
                 raise HTTPException(status_code=400, detail="无效字段内容")
             if isinstance(v, str) and len(v) > 20000:
@@ -373,116 +426,153 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
             if k.endswith("Date") and v and not _valid_date(v):
                 raise HTTPException(status_code=400, detail="日期格式无效")
         new_data = {**data, **fields}
-        if new_data.get("status") not in STATUSES:
-            raise HTTPException(status_code=400, detail="无效状态")
-        if new_data.get("firstResult") not in FIRST_RESULTS:
-            raise HTTPException(status_code=400, detail="无效查验结果")
-        if fields.get("firstResult") == "放行":
-            new_data["status"] = "已放行"
-        if new_data["status"] == "已放行" and not new_data.get("releaseDate"):
-            new_data["releaseDate"] = date.today().isoformat()
+        status = data.get("status")
+        notes = []
+
+        if "firstResult" in fields and fields["firstResult"] != data.get("firstResult"):
+            if status != "在查":
+                raise HTTPException(status_code=400, detail="已归档或退运的货物不能修改查验结果")
+            if fields["firstResult"] not in FIRST_RESULTS:
+                raise HTTPException(status_code=400, detail="无效查验结果")
+        if fields.get("firstResult") and fields["firstResult"] != "待反馈" and not new_data.get("resultDate"):
+            raise HTTPException(status_code=400, detail="请填写查验结果日期")
+        if ("firstResult" in fields or "resultNotes" in fields) and new_data.get("firstResult") == "其他" \
+                and not (new_data.get("resultNotes") or "").strip():
+            raise HTTPException(status_code=400, detail="请填写其他查验结果")
+        if new_data.get("declarationStatus") and new_data["declarationStatus"] not in DECLARATION_STATUSES:
+            raise HTTPException(status_code=400, detail="无效申报状态")
+        if new_data.get("inspectionType") and new_data["inspectionType"] not in INSPECTION_TYPES:
+            raise HTTPException(status_code=400, detail="无效查验类型")
+        if "inspectionType" in fields and new_data.get("inspectionType") == "其他" \
+                and not (new_data.get("inspectionTypeOther") or "").strip():
+            raise HTTPException(status_code=400, detail="请说明其他查验类型")
+        if new_data.get("openedCartons") and new_data["openedCartons"] not in OPENED_CARTONS:
+            raise HTTPException(status_code=400, detail="无效拆查箱数")
+        if ("pickupConfirmed" in fields or "releasedPickupDate" in fields) and new_data.get("pickupConfirmed") \
+                and (new_data.get("status") != "已放行" or not new_data.get("releasedPickupDate")):
+            raise HTTPException(status_code=400, detail="放行后填写提货时间才能确认")
+
+        # 完成预处理：调整过文件的，要写明调整内容并上传更新文件；与 V2 一样，每次勾选保存都刷新完成时间
+        preprocessed = bool(fields.get("preprocessComplete"))
+        if fields.get("preprocessComplete") and new_data.get("updatedFiles"):
+            if not (new_data.get("fileNotes") or "").strip():
+                raise HTTPException(status_code=400, detail="请说明文件调整内容")
+            if not db[FILES].find_one({"shipment_id": s["_id"], "category": {"$in": UPDATE_FILES}, "deleted": {"$ne": True}}):
+                raise HTTPException(status_code=400, detail="请先上传更新文件再完成预处理")
+        if preprocessed:
+            new_data["preprocessedAt"] = _now()
+
+        if fields.get("firstResult") == "放行" and data.get("firstResult") != "放行":
+            new_data.update(status="已放行", releaseDate=new_data.get("resultDate"))
+            notes.append("转入放行归档")
+        # 只在「已批复」变化时切换状态：旧数据里有安排退运但没记批复的，保存航班等信息不能把它改回申请退运
+        if "approved" in fields and "status" not in fields and fields["approved"] != bool(data.get("approved")):
+            if status not in ("申请退运", "安排退运"):
+                raise HTTPException(status_code=400, detail="请先申请退运")
+            new_data["status"] = "安排退运" if fields["approved"] else "申请退运"
+        if "status" in fields and fields["status"] != status:
+            if fields["status"] not in STATUSES:
+                raise HTTPException(status_code=400, detail="无效状态")
+            if fields["status"] == "已放行" and not new_data.get("releaseDate"):
+                new_data["releaseDate"] = date.today().isoformat()
+            if fields["status"] == "申请退运" and not new_data.get("applicationDate"):
+                new_data["applicationDate"] = date.today().isoformat()
+            # 「已批复」跟着状态走，退运安排页的勾选才和状态一致
+            new_data["approved"] = fields["status"] == "安排退运"
+            # 离开已放行时清空放行日期，除非这次同时改了放行日期
+            if status == "已放行" and fields.get("releaseDate", data.get("releaseDate")) == data.get("releaseDate"):
+                new_data["releaseDate"] = ""
+            notes.append(f"状态改为{fields['status']}")
+
         _save_shipment(db, s, p.get("revision"), new_data)
-        _log(db, s["_id"], user, "更新：" + "、".join(fields))
+        if preprocessed:
+            text = f"完成预处理：{new_data.get('declarationStatus') or '未知'} / {'已调整文件' if new_data.get('updatedFiles') else '未调整文件'}"
+        else:
+            text = "更新：" + "、".join(fields)
+        _log(db, s["_id"], user, text + ("，" + "，".join(notes) if notes else ""))
+        return {"ok": True}
+
+    if action == "returnApply":
+        _allow(user, ("analyst",))
+        application_date = p.get("date") or date.today().isoformat()
+        if not _valid_date(application_date):
+            raise HTTPException(status_code=400, detail="申请日期无效")
+        if data.get("status") != "在查":
+            raise HTTPException(status_code=400, detail="只有在查货物可申请退运")
+        # 管理员把退运改回在查后再次申请，上一次的批复不再有效
+        _save_shipment(db, s, p.get("revision"), {**data, "status": "申请退运", "applicationDate": application_date, "approved": False})
+        _log(db, s["_id"], user, "申请退运")
         return {"ok": True}
 
     if action == "round":
         _allow(user, ("analyst",))
         body = p.get("body") or {}
-        measure = str(body.get("measure") or "").strip()
-        if not _valid_date(body.get("date")) or not measure:
-            raise HTTPException(status_code=400, detail="处理日期和措施必填")
+        measure = str(body.get("measure") or "").strip()[:20000]
+        if not measure:
+            raise HTTPException(status_code=400, detail="请填写处理方案")
         if data.get("status") != "在查":
             raise HTTPException(status_code=400, detail="该票已离开在查池，不能新增轮次")
         rounds = _rounds_of(db, s["_id"])
-        if rounds and rounds[-1].get("plan") != "继续":
-            raise HTTPException(status_code=400, detail="最新一轮的应对方案选择「继续」后才能新增一轮")
+        if rounds and not _feedback_result(rounds[-1]) and not (rounds[-1].get("feedback") or "").strip():
+            raise HTTPException(status_code=400, detail="请先补齐上一轮CBP反馈")
+        # 只升版本号：两个人同时新增时只有一个成功
+        _save_shipment(db, s, p.get("revision"), data)
+        round_id = str(uuid.uuid4())
         db[ROUNDS].insert_one({
-            "_id": str(uuid.uuid4()),
+            "_id": round_id,
             "shipment_id": s["_id"],
             "created": _now(),
-            "date": body["date"],
+            "date": date.today().isoformat(),
             "measure": measure,
             "notes": str(body.get("notes") or ""),
             "feedbackDate": "",
             "feedback": "",
             "feedbackResult": "",
-            "plan": "",
+            "revision": 1,
         })
-        _log(db, s["_id"], user, "新增处理轮次")
-        return {"ok": True}
+        _log(db, s["_id"], user, f"第{len(rounds) + 1}轮处理：{measure}")
+        return {"roundId": round_id}
 
     if action == "feedback":
         _allow(user, ("analyst",))
-        feedback_date = p.get("feedbackDate") or ""
-        if feedback_date and not _valid_date(feedback_date):
-            raise HTTPException(status_code=400, detail="日期格式无效")
+        if data.get("status") != "在查":
+            raise HTTPException(status_code=400, detail="已归档或申请退运的货物不能继续处理")
         rounds = _rounds_of(db, s["_id"])
         rnd = next((r for r in rounds if r["_id"] == str(p.get("roundId") or "")), None)
         if not rnd:
             raise HTTPException(status_code=404, detail="未找到处理轮次")
-        changes = {"feedbackDate": feedback_date, "feedback": str(p.get("feedback") or "")}
-        note = ""
+        if rnd is not rounds[-1]:
+            raise HTTPException(status_code=400, detail="历史轮次已锁定，请在最新轮次记录")
+        old_revision = rnd.get("revision") or 1
+        if p.get("roundRevision") != old_revision or p.get("revision") != s["revision"]:
+            raise HTTPException(status_code=409, detail="记录已更新，请刷新")
         result = p.get("feedbackResult") or ""
-        before = _feedback_result(rnd)
-        if "feedbackResult" in p and result != before:
-            if (p.get("feedbackResultBefore") or "") != before:
-                raise HTTPException(status_code=409, detail="反馈结果已被其他人修改，请刷新后再保存")
-            if result not in FEEDBACK_RESULTS:
-                raise HTTPException(status_code=400, detail="无效的反馈结果")
-            if rnd is not rounds[-1]:
-                raise HTTPException(status_code=400, detail="只能修改最新一轮的反馈结果")
-            status = data.get("status")
-            if result == "放行" and status == "在查":
-                release = feedback_date or date.today().isoformat()
-                _save_shipment(db, s, s["revision"], {**data, "status": "已放行", "releaseDate": release})
-                note = "，转入放行归档"
-            elif before == "放行" and status == "已放行":
-                _save_shipment(db, s, s["revision"], {**data, "status": "在查", "releaseDate": ""})
-                note = "，退回在查"
-            elif status != "在查" and not (result == "放行" and status == "已放行"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="这票已离开在查池，反馈结果不能再改；如需调整，请先在「登记与跟进」把当前状态改回「在查」",
-                )
-            changes["feedbackResult"] = result
-            if result != "新要求":
-                # 应对方案只在反馈结果为「新要求」时有意义
-                changes["plan"] = ""
-        db[ROUNDS].update_one({"_id": rnd["_id"]}, {"$set": changes})
-        _log(db, s["_id"], user, "更新CBP反馈" + (f"：反馈结果{result}{note}" if "feedbackResult" in changes else ""))
-        return {"ok": True}
-
-    if action == "plan":
-        _allow(user, ("analyst",))
-        plan = p.get("plan")
-        if plan not in PLANS:
-            raise HTTPException(status_code=400, detail="无效的应对方案")
-        rounds = _rounds_of(db, s["_id"])
-        if not rounds or rounds[-1]["_id"] != str(p.get("roundId") or ""):
-            raise HTTPException(status_code=400, detail="只能修改最新一轮的应对方案")
-        rnd = rounds[-1]
-        if _feedback_result(rnd) != "新要求":
-            raise HTTPException(status_code=400, detail="反馈结果为「新要求」时才能选择应对方案")
-        before = rnd.get("plan") or ""
-        if plan == before:
-            return {"ok": True}
-        if (p.get("planBefore") or "") != before:
-            raise HTTPException(status_code=409, detail="应对方案已被其他人修改，请刷新后再保存")
-        status = data.get("status")
-        note = ""
-        if plan == "申请退运" and status == "在查":
-            _save_shipment(db, s, s["revision"], {**data, "status": "安排退运"})
-            note = "，转入退运跟进"
-        elif before == "申请退运" and status == "安排退运":
-            _save_shipment(db, s, s["revision"], {**data, "status": "在查"})
-            note = "，退回在查"
-        elif status != "在查" and not (plan == "申请退运" and status == "安排退运"):
-            raise HTTPException(
-                status_code=400,
-                detail="这票已离开在查池，应对方案不能再改；如需调整，请先在「登记与跟进」把当前状态改回「在查」",
-            )
-        db[ROUNDS].update_one({"_id": rnd["_id"]}, {"$set": {"plan": plan}})
-        _log(db, s["_id"], user, f"应对方案：{plan}{note}")
+        feedback_date = p.get("feedbackDate") or ""
+        feedback = str(p.get("feedback") or "")
+        if result not in FEEDBACK_RESULTS:
+            raise HTTPException(status_code=400, detail="无效反馈结果")
+        if (result or feedback_date) and not _valid_date(feedback_date):
+            raise HTTPException(status_code=400, detail="请填写反馈日期")
+        if result == "提出新要求" and not feedback.strip():
+            raise HTTPException(status_code=400, detail="请填写CBP新要求")
+        # 先按页面上的版本号保存货物（放行时同时改状态），再写轮次：与申请退运、新增一轮等操作互斥，
+        # 不会出现轮次写了放行、货物却已被别人改成申请退运的情况（HUBS V2 在同一个事务里完成）
+        next_data = {**data, "status": "已放行", "releaseDate": feedback_date} if result == "放行" else data
+        _save_shipment(db, s, p.get("revision"), next_data)
+        changes = {
+            "measure": str(p.get("measure") or "").strip()[:20000] or rnd.get("measure", ""),
+            "feedbackDate": feedback_date,
+            "feedback": feedback,
+            "feedbackResult": result,
+            "revision": old_revision + 1,
+        }
+        # 旧轮次没有版本号，按第 1 版处理
+        same_revision = old_revision if rnd.get("revision") else {"$exists": False}
+        r = db[ROUNDS].update_one({"_id": rnd["_id"], "revision": same_revision}, {"$set": changes})
+        if not r.matched_count:
+            raise HTTPException(status_code=409, detail="记录已更新，请刷新")
+        note = "，转入放行归档" if result == "放行" else ""
+        _log(db, s["_id"], user, f"第{len(rounds)}轮：{result or '更新处理方案'}{note}")
         return {"ok": True}
 
     if action == "cargo":
@@ -507,6 +597,14 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
                 "cartons": int(cartons),
                 "hawb": str(row.get("hawb") or "").strip(),
             })
+        # 只升版本号：两个人同时替换时只有一个成功，不会留下两套明细
+        _save_shipment(db, s, p.get("revision"), data)
+        # 替换时先写入新明细再删旧的，写入失败不会丢原有明细
+        old_ids = [c["_id"] for c in db[CARGO].find({"shipment_id": s["_id"]}, {"_id": 1})] if p.get("replace") else []
         db[CARGO].insert_many(docs)
-        _log(db, s["_id"], user, f"新增客户明细 {len(docs)} 行")
+        if old_ids:
+            db[CARGO].delete_many({"_id": {"$in": old_ids}})
+            _log(db, s["_id"], user, f"替换客户明细：删除原有 {len(old_ids)} 行，新增 {len(docs)} 行")
+        else:
+            _log(db, s["_id"], user, f"新增客户明细 {len(docs)} 行")
         return {"ok": True}

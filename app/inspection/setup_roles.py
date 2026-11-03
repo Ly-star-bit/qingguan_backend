@@ -3,7 +3,7 @@
 查验工作台的业务角色来自系统角色（见 inspection.SYSTEM_ROLES）：
   inspection_monitor  登记与跟进：4 个接口
   inspection_analyst  处理与分析：4 个接口
-  inspection_viewer   在查查询（只读）：读取数据、下载附件 2 个接口
+  inspection_viewer   只读查询：读取数据、下载附件 2 个接口
 之后给员工开通只需在「用户」里分配角色，菜单、接口权限和业务角色一次生效。
 
 用法（在 qingguan_backend 目录下，使用与后端相同的 .env）：
@@ -24,7 +24,7 @@ WRITE = [("POST", "/inspection/workspace"), ("POST", "/inspection/upload")]
 ROLE_SPECS = {
     "inspection_monitor": ("查验工作台：登记与跟进", READ + WRITE),
     "inspection_analyst": ("查验工作台：处理与分析", READ + WRITE),
-    "inspection_viewer": ("查验工作台：在查查询（只读）", READ),
+    "inspection_viewer": ("查验工作台：只读查询", READ),
 }
 assert set(ROLE_SPECS) == set(SYSTEM_ROLES)
 BUSINESS_TO_SYSTEM = {v: k for k, v in SYSTEM_ROLES.items()}

@@ -199,6 +199,23 @@ def _log(db, shipment_id: str, user: Dict[str, str], action: str) -> None:
     })
 
 
+def _cargo_row(row: Any) -> Dict[str, Any]:
+    """校验一行客户明细：客户必填，箱数为正整数（Excel 读出的 3.0 也算），分单可空"""
+    row = row if isinstance(row, dict) else {}
+    customer = str(row.get("customer") or "").strip()
+    cartons = row.get("cartons")
+    is_integer = (isinstance(cartons, int) and not isinstance(cartons, bool)) or (
+        isinstance(cartons, float) and cartons.is_integer()
+    )
+    if not customer or not is_integer or cartons < 1:
+        raise HTTPException(status_code=400, detail="客户必填，箱数须为正整数")
+    return {"customer": customer, "cartons": int(cartons), "hawb": str(row.get("hawb") or "").strip()}
+
+
+def _cargo_label(row: Dict[str, Any]) -> str:
+    return f"{row.get('customer')} {row.get('cartons')} 箱" + (f"（分单 {row['hawb']}）" if row.get("hawb") else "")
+
+
 def _save_shipment(db, s: Dict[str, Any], revision: Any, data: Dict[str, Any]) -> None:
     """按版本号乐观锁保存，别人先保存过时返回 409"""
     try:
@@ -359,7 +376,7 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         _log(db, shipment_id, user, "登记查验")
         return {"id": shipment_id}
 
-    if action not in ("station", "update", "returnApply", "round", "feedback", "cargo", "deleteFile"):
+    if action not in ("station", "update", "returnApply", "round", "feedback", "cargo", "cargoRow", "deleteFile"):
         raise HTTPException(status_code=400, detail="未知操作")
     s = _ship(db, str(p.get("shipmentId") or ""), user)
     data = s["data"]
@@ -580,23 +597,7 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
         rows = p.get("rows")
         if not isinstance(rows, list) or not 1 <= len(rows) <= 1000:
             raise HTTPException(status_code=400, detail="一次需提供1至1000行明细")
-        docs = []
-        for row in rows:
-            row = row if isinstance(row, dict) else {}
-            customer = str(row.get("customer") or "").strip()
-            cartons = row.get("cartons")
-            is_integer = (isinstance(cartons, int) and not isinstance(cartons, bool)) or (
-                isinstance(cartons, float) and cartons.is_integer()
-            )
-            if not customer or not is_integer or cartons < 1:
-                raise HTTPException(status_code=400, detail="客户必填，箱数须为正整数")
-            docs.append({
-                "_id": str(uuid.uuid4()),
-                "shipment_id": s["_id"],
-                "customer": customer,
-                "cartons": int(cartons),
-                "hawb": str(row.get("hawb") or "").strip(),
-            })
+        docs = [{"_id": str(uuid.uuid4()), "shipment_id": s["_id"], **_cargo_row(row)} for row in rows]
         # 只升版本号：两个人同时替换时只有一个成功，不会留下两套明细
         _save_shipment(db, s, p.get("revision"), data)
         # 替换时先写入新明细再删旧的，写入失败不会丢原有明细
@@ -607,4 +608,39 @@ def post_workspace(request: Request, p: Dict[str, Any] = Body(...), db=Depends(g
             _log(db, s["_id"], user, f"替换客户明细：删除原有 {len(old_ids)} 行，新增 {len(docs)} 行")
         else:
             _log(db, s["_id"], user, f"新增客户明细 {len(docs)} 行")
+        return {"ok": True}
+
+    if action == "cargoRow":
+        # 单行新增、修改、删除，权限与导入相同（HUBS V2 只能整表导入）。
+        # 与附件一样不升货物版本号：页面按版本号重建表单，升了会清掉同一页上还没保存的内容（如查验预处理表单）；
+        # 修改、删除改按明细行自己的版本号防止覆盖别人的改动
+        _allow(user, ("analyst",))
+        op = p.get("op")
+        if op not in ("add", "update", "delete"):
+            raise HTTPException(status_code=400, detail="无效明细操作")
+        row = _cargo_row(p.get("row")) if op != "delete" else None
+        if op == "add":
+            db[CARGO].insert_one({"_id": str(uuid.uuid4()), "shipment_id": s["_id"], **row, "revision": 1})
+            _log(db, s["_id"], user, "新增客户明细：" + _cargo_label(row))
+            return {"ok": True}
+
+        old = db[CARGO].find_one({"_id": str(p.get("rowId") or ""), "shipment_id": s["_id"]})
+        if not old:
+            raise HTTPException(status_code=404, detail="明细不存在，请刷新")
+        # 导入的明细没有版本号，按第 1 版处理
+        old_revision = old.get("revision") or 1
+        if p.get("rowRevision") != old_revision:
+            raise HTTPException(status_code=409, detail="明细已被其他人修改，请刷新")
+        same = {"_id": old["_id"], "revision": old_revision if old.get("revision") else {"$exists": False}}
+        if op == "update":
+            changed = db[CARGO].update_one(same, {"$set": {**row, "revision": old_revision + 1}}).matched_count
+        else:
+            changed = db[CARGO].delete_one(same).deleted_count
+        if not changed:
+            raise HTTPException(status_code=409, detail="明细已被其他人修改，请刷新")
+        if op == "update":
+            _log(db, s["_id"], user, f"修改客户明细：{_cargo_label(old)} → {_cargo_label(row)}")
+        else:
+            # 操作记录里留下原内容，误删时按记录重新新增
+            _log(db, s["_id"], user, "删除客户明细：" + _cargo_label(old))
         return {"ok": True}
